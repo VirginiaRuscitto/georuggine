@@ -1,0 +1,6 @@
+server/target/
+server/src/database/georuggine.db
+
+client/node_modules/
+
+.vscode/
