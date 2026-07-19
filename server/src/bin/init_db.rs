@@ -16,7 +16,6 @@ fn main() -> rusqlite::Result<()> {
 
         CREATE TABLE users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
             surname TEXT NOT NULL,
             email TEXT NOT NULL UNIQUE,
