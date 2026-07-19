@@ -20,8 +20,7 @@ fn main() -> rusqlite::Result<()> {
             name TEXT NOT NULL,
             surname TEXT NOT NULL,
             email TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL,
-            salt TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
