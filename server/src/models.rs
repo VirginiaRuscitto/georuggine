@@ -26,6 +26,15 @@ pub struct User {
     pub email: String,
 }
 
+ #[derive(Serialize, Deserialize, Debug)]
+ pub struct Message {
+     pub id: i64,
+     pub sender_id: Option<i64>,
+     pub recipient_id: Option<i64>,
+     pub content: String,
+     pub sent_at: DateTime<Utc>,
+}
+
 //TODO: valutare quale serve
 
 // #[derive(Serialize, Deserialize, Debug)]
@@ -58,13 +67,4 @@ pub struct User {
 //     pub state: MovementState,
 //     pub started_at: DateTime<Utc>,
 //     pub ended_at: Option<DateTime<Utc>>,
-// }
-// 
-// #[derive(Serialize, Deserialize, Debug)]
-// pub struct Message {
-//     pub id: i64,
-//     pub sender_id: Option<i64>,
-//     pub recipient_id: Option<i64>,
-//     pub content: String,
-//     pub sent_at: DateTime<Utc>,
 // }
