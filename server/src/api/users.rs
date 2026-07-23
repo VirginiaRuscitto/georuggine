@@ -1,16 +1,27 @@
-use crate::db::SharedDb;
-use crate::models::UserState;
-use crate::state::ActiveUsers;
+use axum::{extract::State, response::IntoResponse, Json};
+use serde::{Deserialize, Serialize};
+use crate::{
+    models::UserState,
+    database::connection::SharedDb,
+    dao::users_dao,
+};
+
+#[derive(Serialize, Deserialize)]
+pub struct UserStatus {
+    pub id: i64,
+    pub username: String,
+    pub state: UserState, // "Disconnected" | "Stopped" | "Moving"
+}
 
 /// GET /api/users
 /// Ritorna la lista completa degli utenti registrati.
-pub async fn get_users_handler(State(db): State<SharedDb>, State(active): State<ActiveUsers>) -> impl IntoResponse{
+pub async fn get_users_handler(State(db): State<SharedDb>) -> impl IntoResponse{
 
-    let users = match crate::db::fetch_all_users(&db) {
+    let users = match users_dao::get_all_users(&db) {
         Ok(u) => u,
         Err(e) => {
-            tracing::error!("errore fetch_all_users: {e}");
-            return Json::<Vec<UserListItem>>(vec![]).into_response();
+            eprintln!("errore get_all_users: {e}");
+            return Json::<Vec<UserStatus>>(vec![]).into_response();
         }
     };
 
@@ -18,10 +29,57 @@ pub async fn get_users_handler(State(db): State<SharedDb>, State(active): State<
         .into_iter()
         .map(|u| UserStatus {
             id: u.id,
-            username: u.username,
-            state: "Disconnected".to_string(),
+            username: u.name,
+            state: UserState::Disconnected,
         })
         .collect();
 
     Json(result).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+    use axum::extract::State;
+    use crate::api::users::{get_users_handler, UserStatus};
+    use crate::dao::users_dao;
+    use crate::database::connection::SharedDb;
+
+    #[tokio::test]
+    async fn users_test() {
+        let connection: SharedDb = crate::database::connection::shared_connection().unwrap();
+
+        users_dao::insert_user(&connection, &crate::models::NewUser{
+            name: "Giacomo".to_string(),
+            surname: "".to_string(),
+            email: "1".to_string(),
+            password_hash: "xyz".to_string(),
+        }).unwrap();
+        users_dao::insert_user(&connection, &crate::models::NewUser{
+            name: "Giovanni".to_string(),
+            surname: "".to_string(),
+            email: "2".to_string(),
+            password_hash: "xyz".to_string(),
+        }).unwrap();
+        users_dao::insert_user(&connection, &crate::models::NewUser{
+            name: "Luigi".to_string(),
+            surname: "".to_string(),
+            email: "3".to_string(),
+            password_hash: "xyz".to_string(),
+        }).unwrap();
+
+        let response = get_users_handler(State(connection)).await.into_response();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read body");
+
+        let users: Vec<UserStatus> = serde_json::from_slice(&body_bytes)
+            .expect("failed to deserialize response body");
+
+        assert_eq!(users.len(), 3);
+        assert_eq!(users[0].username, "Giacomo");
+    }
 }
