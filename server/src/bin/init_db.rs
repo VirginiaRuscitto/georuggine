@@ -40,7 +40,7 @@ fn main() -> rusqlite::Result<()> {
         CREATE TABLE movement_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            state TEXT NOT NULL CHECK(state IN ('fermo','in_movimento')),
+            state TEXT NOT NULL CHECK(state IN ('stopped','moving')),
             started_at TEXT NOT NULL,
             ended_at TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id),

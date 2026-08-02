@@ -52,7 +52,7 @@ pub fn get_user_by_id(db: &SharedDb, user_id: i64) -> Result<Option<User>> {
 
 pub fn email_exists(db: &SharedDb, email: &str) -> Result<bool> {
     let conn = db.lock().unwrap();
-    let count = conn.query_row(
+    let count: i32 = conn.query_row(
         "SELECT COUNT(*) FROM users WHERE email = ?1",
         params![email],
         |row| row.get(0),
