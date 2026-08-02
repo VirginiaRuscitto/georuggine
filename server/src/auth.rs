@@ -1,18 +1,25 @@
 use std::env;
 use std::sync::OnceLock;
-use argon2::password_hash::{rand_core::OsRng, SaltString};
+use argon2::password_hash::SaltString;
+use rand::rngs::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use chrono::{Duration, Utc};
-use axum::{extract::{Request, State}, http::{HeaderMap, StatusCode}, middleware::Next,
-    response::{IntoResponse, Response}, Json};
-
+use axum::{
+    extract::{Request, State},
+    http::{HeaderMap, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    routing::post,
+    Json,
+    Router,
+};
+use crate::errors::error_response;
 use crate::dao::users_dao;
 use crate::database::connection::SharedDb;
 use crate::models::NewUser;
 
-//TODO: fare il .env
 fn jwt_secret() -> &'static [u8] {
     static SECRET: OnceLock<Vec<u8>> = OnceLock::new();
 
@@ -28,13 +35,13 @@ fn jwt_secret() -> &'static [u8] {
         .as_slice()
 }
 
-pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
+fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default().hash_password(password.as_bytes(), &salt)?;
     Ok(hash.to_string())
 }
 
-pub fn verify_password(password: &str, hash: &str) -> bool {
+fn verify_password(password: &str, hash: &str) -> bool {
     match PasswordHash::new(hash) {
         Ok(parsed) => Argon2::default()
             .verify_password(password.as_bytes(), &parsed)
@@ -44,13 +51,13 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
 }
 
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     pub sub: i64,
     pub exp: usize,
 }
 
-pub fn generate_jwt(user_id: i64) -> Result<String, jsonwebtoken::errors::Error> {
+fn generate_jwt(user_id: i64) -> Result<String, jsonwebtoken::errors::Error> {
     let expiration = Utc::now() + Duration::hours(24);
     let claims = Claims {
         sub: user_id,
@@ -63,7 +70,7 @@ pub fn generate_jwt(user_id: i64) -> Result<String, jsonwebtoken::errors::Error>
     )
 }
 
-pub fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(jwt_secret()),
@@ -88,32 +95,22 @@ pub async fn jwt_auth_middleware(headers: HeaderMap, mut req: Request, next: Nex
 
 
 #[derive(Debug, Deserialize)]
-pub struct RegisterRequest {
-    pub name: String,
-    pub surname: String,
-    pub email: String,
-    pub password: String,
+struct RegisterRequest {
+    name: String,
+    surname: String,
+    email: String,
+    password: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LoginRequest {
-    pub email: String,
-    pub password: String,
+struct LoginRequest {
+    email: String,
+    password: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct AuthResponse {
-    pub token: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-//PER INDICARE GLI ERRORI!!!
-fn error_response(status: StatusCode, msg: &str) -> Response {
-    (status, Json(ErrorResponse { error: msg.into() })).into_response()
+struct AuthResponse {
+    token: String,
 }
 
 
@@ -123,7 +120,7 @@ fn validate_password(password: &str) -> bool {
         && password.chars().any(|c| !c.is_alphanumeric())
 }
 
-pub async fn register_handler(State(db): State<SharedDb>, Json(body): Json<RegisterRequest>) -> Response {
+async fn register_handler(State(db): State<SharedDb>, Json(body): Json<RegisterRequest>) -> Response {
     if body.name.trim().is_empty()
         || body.surname.trim().is_empty()
         || body.email.trim().is_empty()
@@ -180,7 +177,7 @@ pub async fn register_handler(State(db): State<SharedDb>, Json(body): Json<Regis
     }
 }
 
-pub async fn login_handler(State(db): State<SharedDb>, Json(body): Json<LoginRequest>) -> Response {
+async fn login_handler(State(db): State<SharedDb>, Json(body): Json<LoginRequest>) -> Response {
     let (user_id, password_hash) = match users_dao::get_credentials_by_email(&db, &body.email) {
         Ok(Some(c)) => c,
         Ok(None) => return error_response(StatusCode::UNAUTHORIZED, "Credenziali non valide"),
@@ -194,11 +191,18 @@ pub async fn login_handler(State(db): State<SharedDb>, Json(body): Json<LoginReq
         return error_response(StatusCode::UNAUTHORIZED, "Credenziali non valide");
     }
 
-    match generate_jwt(user_id, &body.email) {
+    match generate_jwt(user_id) {
         Ok(token) => (StatusCode::OK, Json(AuthResponse { token })).into_response(),
         Err(e) => {
             tracing::error!("errore generazione jwt: {e}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare il login. Riprova più tardi")
         }
     }
+}
+
+
+pub fn router() -> Router<SharedDb> {
+    Router::new()
+        .route("/api/register", post(register_handler))
+        .route("/api/login", post(login_handler))
 }
