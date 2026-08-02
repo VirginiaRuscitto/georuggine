@@ -4,12 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.39", features = ["bundled", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rumqttc = "0.24"
+rumqttc = "0.25"
 tokio = { version = "1", features = ["full"] }
 axum = "0.8.9"
 argon2 = "0.5"
-jsonwebtoken = "10.4"
+rand = "0.8"
+jsonwebtoken = "11.0"
+tower-http = { version = "0.7", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+dotenvy = "0.15"
