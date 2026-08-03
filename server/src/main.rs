@@ -1,4 +1,4 @@
-mod api;
+mod handlers;
 mod auth;
 mod dao;
 mod database;
