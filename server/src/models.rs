@@ -37,7 +37,7 @@ pub struct Position {
     pub recorded_at: DateTime<Utc>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum ReportPeriod {
     Day,
     Week,
@@ -54,7 +54,7 @@ pub struct RouteReport {
     pub pause_duration_secs: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum MovementState {
     Stopped,
