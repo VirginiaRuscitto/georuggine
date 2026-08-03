@@ -142,3 +142,75 @@ pub fn compute_pause_duration_secs(sessions: &[MovementSession]) -> i64{
         })
         .sum()
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+    use axum::extract::{State, Path, Query};
+    use chrono::{Utc, Duration};
+    use rusqlite::fallible_iterator::FallibleIterator;
+    use serde::{Deserialize, Serialize};
+
+    use crate::database::connection::SharedDb;
+    use crate::dao::{users_dao, movement_sessions_dao};
+    use crate::models::{NewUser, MovementState, ReportPeriod, RouteReport};
+    use crate::handlers::report::{get_report_handler, ReportQuery};
+    use crate::handlers::users::get_users_handler;
+
+    #[tokio::test]
+    async fn report_handler_integration_test() {
+        // 1. Setup DB
+        let connection: SharedDb = crate::database::connection::shared_connection().unwrap();
+
+        connection.lock().unwrap().execute_batch("DELETE FROM movement_sessions; DELETE FROM users;").unwrap();
+
+        let now = Utc::now();
+
+        // 2. Preparazione dei dati (Seed)
+        let user_id = users_dao::insert_user(&connection, &NewUser {
+            name: "Report".to_string(),
+            surname: "Tester".to_string(),
+            email: "report@tester.com".to_string(),
+            password_hash: "xyz".to_string(),
+        }).unwrap();
+
+        // Sessione 1: Moving (10 secondi)
+        let id_1 = movement_sessions_dao::insert_movement_session(
+            &connection, user_id, MovementState::Moving, now - Duration::seconds(30)
+        ).unwrap();
+        movement_sessions_dao::close_movement_session(&connection, id_1, now - Duration::seconds(20)).unwrap();
+
+        // Sessione 2: Stopped (15 secondi)
+        let id_2 = movement_sessions_dao::insert_movement_session(
+            &connection, user_id, MovementState::Stopped, now - Duration::seconds(20)
+        ).unwrap();
+        movement_sessions_dao::close_movement_session(&connection, id_2, now - Duration::seconds(5)).unwrap();
+
+        // Costruiamo la query string (es. ?period=Daily)
+        let query_period = Query(ReportQuery {
+            user_id,
+            period: ReportPeriod::Day, // Assicurati che questo copra la data di 'now'
+        });
+
+        // 4. Esecuzione dell'handler
+        let response = get_report_handler(
+            State(connection),
+            query_period
+        ).await.into_response();
+
+        // 5. Asserzioni di base sulla risposta HTTP
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        // 6. Lettura e deserializzazione del body JSON
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read body");
+
+        let report: RouteReport = serde_json::from_slice(&body_bytes)
+            .expect("failed to deserialize report response body");
+
+        // 7. Asserzioni sul risultato dei calcoli esposti al client
+        assert_eq!(report.movement_duration_secs, 10);
+        assert_eq!(report.pause_duration_secs, 15);
+    }
+}
