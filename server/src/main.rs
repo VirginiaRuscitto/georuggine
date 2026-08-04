@@ -27,6 +27,7 @@ async fn main() {
 
     let app = Router::new()
         .merge(auth::router())
+        .merge(auth::admin_router())
         .layer(cors)
         .with_state(db);
 

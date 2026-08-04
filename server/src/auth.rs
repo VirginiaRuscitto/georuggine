@@ -7,18 +7,19 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use chrono::{Duration, Utc};
 use axum::{
-    extract::{Request, State},
+    extract::{Extension, Request, State, Path},
     http::{HeaderMap, StatusCode},
-    middleware::Next,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{post, delete},
     Json,
     Router,
 };
+use validator::Validate;
 use crate::errors::error_response;
 use crate::dao::users_dao;
 use crate::database::connection::SharedDb;
-use crate::models::NewUser;
+use crate::models::{NewUser, User};
 
 fn jwt_secret() -> &'static [u8] {
     static SECRET: OnceLock<Vec<u8>> = OnceLock::new();
@@ -27,9 +28,10 @@ fn jwt_secret() -> &'static [u8] {
         .get_or_init(|| {
             let secret = env::var("JWT_SECRET")
                 .expect("Errore: impostare la variabile d'ambiente JWT_SECRET prima di avviare il server");
-            if secret.is_empty() {
-                panic!("JWT_SECRET non può essere vuota.");
-            }
+            assert!(
+                !secret.is_empty(),
+                "JWT_SECRET non può essere vuota"
+            );
             secret.into_bytes()
         })
         .as_slice()
@@ -55,19 +57,17 @@ fn verify_password(password: &str, hash: &str) -> bool {
 pub struct Claims {
     pub sub: i64,
     pub exp: usize,
+    pub is_admin: bool, 
 }
 
-fn generate_jwt(user_id: i64) -> Result<String, jsonwebtoken::errors::Error> {
+fn generate_jwt(user_id: i64, is_admin: bool) -> Result<String, jsonwebtoken::errors::Error> {
     let expiration = Utc::now() + Duration::hours(24);
     let claims = Claims {
         sub: user_id,
+        is_admin,
         exp: expiration.timestamp() as usize,
     };
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(jwt_secret()),
-    )
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(jwt_secret()))
 }
 
 fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
@@ -80,26 +80,40 @@ fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
 }
 
 
-pub async fn jwt_auth_middleware(headers: HeaderMap, mut req: Request, next: Next) -> Result<Response, StatusCode> {
+fn authenticate(headers: &HeaderMap,) -> Result<Claims, StatusCode> {
     let token = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let claims = verify_jwt(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    verify_jwt(token).map_err(|_| StatusCode::UNAUTHORIZED)
+}
+
+pub async fn jwt_auth_middleware(headers: HeaderMap, mut req: Request, next: Next) -> Result<Response, StatusCode> {
+    let claims = authenticate(&headers)?;
     req.extensions_mut().insert(claims);
     Ok(next.run(req).await)
 }
 
+pub async fn jwt_admin_middleware(headers: HeaderMap, mut req: Request, next: Next) -> Result<Response, StatusCode> {
+    let claims = authenticate(&headers)?;
+    if !claims.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    req.extensions_mut().insert(claims);
+    Ok(next.run(req).await)
+}
 
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 struct RegisterRequest {
     name: String,
     surname: String,
+    #[validate(email(message = "Email non valida"))]
     email: String,
     password: String,
+    #[serde(default)]
+    is_admin: bool, //ignorato se allow_admin=false in create_user
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,54 +135,12 @@ fn validate_password(password: &str) -> bool {
 }
 
 async fn register_handler(State(db): State<SharedDb>, Json(body): Json<RegisterRequest>) -> Response {
-    if body.name.trim().is_empty()
-        || body.surname.trim().is_empty()
-        || body.email.trim().is_empty()
-        || body.password.is_empty()
-    {
-        return error_response(StatusCode::BAD_REQUEST, "Non sono stati inseriti tutti i dati richiesti");
-    }
-
-    if !validate_password(&body.password) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "La password deve contenere almeno 12 caratteri, una lettera maiuscola e un simbolo",
-        );
-    }
-
-    match users_dao::email_exists(&db, &body.email) {
-        Ok(true) => return error_response(StatusCode::CONFLICT, "Questa email è già registrata"),
-        Ok(false) => {}
-        Err(e) => {
-            tracing::error!("errore db in register: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare la registrazione. Riprova più tardi");
-        }
-    }
-
-    let password_hash = match hash_password(&body.password) {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::error!("errore hashing password: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare la registrazione. Riprova più tardi");
-        }
+    let user = match create_user(&db, body, false) {
+        Ok(u) => u,
+        Err(resp) => return resp,
     };
 
-    let new_user = NewUser {
-        name: body.name,
-        surname: body.surname,
-        email: body.email,
-        password_hash,
-    };
-
-    let user_id = match users_dao::insert_user(&db, &new_user) {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!("errore inserimento utente: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare la registrazione. Riprova più tardi");
-        }
-    };
-
-    match generate_jwt(user_id) {
+    match generate_jwt(user.id, user.is_admin) {
         Ok(token) => (StatusCode::CREATED, Json(AuthResponse { token })).into_response(),
         Err(e) => {
             tracing::error!("errore generazione jwt: {e}");
@@ -177,8 +149,75 @@ async fn register_handler(State(db): State<SharedDb>, Json(body): Json<RegisterR
     }
 }
 
+async fn register_by_admin_handler(State(db): State<SharedDb>, Json(body): Json<RegisterRequest>) -> Response {
+    match create_user(&db, body, true) {
+        Ok(user) => (StatusCode::CREATED, Json(user)).into_response(), //niente token
+        Err(resp) => resp,
+    }
+}
+
+fn create_user(db: &SharedDb, body: RegisterRequest, allow_admin: bool) -> Result<User, Response> {
+    if let Err(errors) = body.validate() {
+        return Err(error_response(StatusCode::BAD_REQUEST, &format!("Dati non validi: {errors}")));
+    }
+
+    if body.name.trim().is_empty()
+        || body.surname.trim().is_empty()
+        || body.password.is_empty()
+    {
+        return Err(error_response(StatusCode::BAD_REQUEST, "Non sono stati inseriti tutti i dati richiesti"));
+    }
+
+    if !validate_password(&body.password) {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "La password deve contenere almeno 12 caratteri, una lettera maiuscola e un simbolo",
+        ));
+    }
+
+    match users_dao::email_exists(db, &body.email) {
+        Ok(true) => return Err(error_response(StatusCode::CONFLICT, "Questa email è già registrata")),
+        Ok(false) => {}
+        Err(e) => {
+            tracing::error!("errore db in register: {e}");
+            return Err(error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare la registrazione. Riprova più tardi"));
+        }
+    }
+
+    let password_hash = match hash_password(&body.password) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!("errore hashing password: {e}");
+            return Err(error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare la registrazione. Riprova più tardi"));
+        }
+    };
+
+    let is_admin = allow_admin && body.is_admin;
+    let new_user = NewUser {
+        name: body.name,
+        surname: body.surname,
+        email: body.email,
+        password_hash,
+        is_admin,
+    };
+
+    let user_id = users_dao::insert_user(db, &new_user).map_err(|e| {
+        tracing::error!("errore inserimento utente: {e}");
+        error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare la registrazione. Riprova più tardi")
+    })?;
+
+    Ok(User {
+        id: user_id,
+        name: new_user.name,
+        surname: new_user.surname,
+        email: new_user.email,
+        is_admin: new_user.is_admin,
+        created_at: Utc::now(),
+    })
+}
+
 async fn login_handler(State(db): State<SharedDb>, Json(body): Json<LoginRequest>) -> Response {
-    let (user_id, password_hash) = match users_dao::get_credentials_by_email(&db, &body.email) {
+    let (user_id, password_hash, is_admin) = match users_dao::get_credentials_by_email(&db, &body.email) {
         Ok(Some(c)) => c,
         Ok(None) => return error_response(StatusCode::UNAUTHORIZED, "Credenziali non valide"),
         Err(e) => {
@@ -191,11 +230,25 @@ async fn login_handler(State(db): State<SharedDb>, Json(body): Json<LoginRequest
         return error_response(StatusCode::UNAUTHORIZED, "Credenziali non valide");
     }
 
-    match generate_jwt(user_id) {
+    match generate_jwt(user_id, is_admin) {
         Ok(token) => (StatusCode::OK, Json(AuthResponse { token })).into_response(),
         Err(e) => {
             tracing::error!("errore generazione jwt: {e}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare il login. Riprova più tardi")
+        }
+    }
+}
+
+async fn delete_user_handler(State(db): State<SharedDb>, Extension(claims): Extension<Claims>,Path(user_id): Path<i64>) -> Response {
+    if claims.sub == user_id {
+        return error_response(StatusCode::BAD_REQUEST, "Non puoi eliminare il tuo stesso account");
+    }
+    match users_dao::delete_user(&db, user_id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
+        Err(e) => {
+            tracing::error!("errore eliminazione utente: {e}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile eliminare l'utente. Riprova più tardi")
         }
     }
 }
@@ -205,4 +258,11 @@ pub fn router() -> Router<SharedDb> {
     Router::new()
         .route("/api/register", post(register_handler))
         .route("/api/login", post(login_handler))
+}
+
+pub fn admin_router() -> Router<SharedDb> {
+    Router::new()
+        .route("/api/admin/register", post(register_by_admin_handler))
+        .route("/api/admin/users/{user_id}", delete(delete_user_handler))
+        .layer(middleware::from_fn(jwt_admin_middleware))
 }

@@ -19,6 +19,7 @@ fn main() -> rusqlite::Result<()> {
             name TEXT NOT NULL,
             surname TEXT NOT NULL,
             email TEXT NOT NULL UNIQUE,
+            is_admin INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0, 1)),
             password_hash TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -29,7 +30,7 @@ fn main() -> rusqlite::Result<()> {
             lat REAL NOT NULL,
             lon REAL NOT NULL,
             recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             CHECK (lat BETWEEN -90 AND 90),
             CHECK (lon BETWEEN -180 AND 180)
         );
@@ -43,7 +44,7 @@ fn main() -> rusqlite::Result<()> {
             state TEXT NOT NULL CHECK(state IN ('stopped','moving')),
             started_at TEXT NOT NULL,
             ended_at TEXT,
-            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             CHECK (ended_at IS NULL OR ended_at >= started_at)
         );
 
@@ -53,8 +54,8 @@ fn main() -> rusqlite::Result<()> {
             recipient_id INTEGER,
             content TEXT NOT NULL,
             sent_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (sender_id) REFERENCES users(id),
-            FOREIGN KEY (recipient_id) REFERENCES users(id)
+            FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE
         );
         "#,
     )?;

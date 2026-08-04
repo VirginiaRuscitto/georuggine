@@ -20,6 +20,7 @@ pub struct User {
     pub surname: String,
     pub email: String,
     pub created_at: DateTime<Utc>,
+    pub is_admin: bool,
 }
 
 #[derive(Debug)] //non metto serialize e deserialize perchè non conto di farlo arrivare da json
@@ -28,6 +29,7 @@ pub struct NewUser {
     pub surname: String,
     pub email: String,
     pub password_hash: String,
+    pub is_admin: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
