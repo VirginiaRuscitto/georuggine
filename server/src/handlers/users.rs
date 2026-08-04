@@ -41,7 +41,7 @@ pub async fn get_users_handler(State(db): State<SharedDb>) -> impl IntoResponse{
 mod tests {
     use axum::response::IntoResponse;
     use axum::extract::State;
-    use crate::api::users::{get_users_handler, UserStatus};
+    use crate::handlers::users::{get_users_handler, UserStatus};
     use crate::dao::users_dao;
     use crate::database::connection::SharedDb;
 
