@@ -5,6 +5,7 @@ mod database;
 mod models;
 mod state;
 mod errors;
+mod mqtt;
 
 use axum::http::{HeaderValue, Method};
 use axum::Router;
