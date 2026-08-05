@@ -223,6 +223,7 @@ mod tests {
                             surname: format!("Test{}", u),
                             email: format!("user{}@example.com", u),
                             password_hash: "hashed_pass_123".to_string(),
+                            is_admin: false,
                         };
 
                         let user_id = users_dao::insert_user(db_ref, &new_user)
