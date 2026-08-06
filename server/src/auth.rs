@@ -20,6 +20,7 @@ use crate::errors::error_response;
 use crate::dao::users_dao;
 use crate::database::connection::SharedDb;
 use crate::models::{NewUser, User};
+use crate::state::AppState;  // <-- NUOVO: importa AppState
 
 fn jwt_secret() -> &'static [u8] {
     static SECRET: OnceLock<Vec<u8>> = OnceLock::new();
@@ -52,7 +53,6 @@ fn verify_password(password: &str, hash: &str) -> bool {
     }
 }
 
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     pub sub: i64,
@@ -79,8 +79,7 @@ fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     Ok(data.claims)
 }
 
-
-fn authenticate(headers: &HeaderMap,) -> Result<Claims, StatusCode> {
+fn authenticate(headers: &HeaderMap) -> Result<Claims, StatusCode> {
     let token = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
@@ -113,7 +112,7 @@ struct RegisterRequest {
     email: String,
     password: String,
     #[serde(default)]
-    is_admin: bool, //ignorato se allow_admin=false in create_user
+    is_admin: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,7 +125,6 @@ struct LoginRequest {
 struct AuthResponse {
     token: String,
 }
-
 
 fn validate_password(password: &str) -> bool {
     password.len() >= 12
@@ -151,7 +149,7 @@ async fn register_handler(State(db): State<SharedDb>, Json(body): Json<RegisterR
 
 async fn register_by_admin_handler(State(db): State<SharedDb>, Json(body): Json<RegisterRequest>) -> Response {
     match create_user(&db, body, true) {
-        Ok(user) => (StatusCode::CREATED, Json(user)).into_response(), //niente token
+        Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
         Err(resp) => resp,
     }
 }
@@ -239,7 +237,7 @@ async fn login_handler(State(db): State<SharedDb>, Json(body): Json<LoginRequest
     }
 }
 
-async fn delete_user_handler(State(db): State<SharedDb>, Extension(claims): Extension<Claims>,Path(user_id): Path<i64>) -> Response {
+async fn delete_user_handler(State(db): State<SharedDb>, Extension(claims): Extension<Claims>, Path(user_id): Path<i64>) -> Response {
     if claims.sub == user_id {
         return error_response(StatusCode::BAD_REQUEST, "Non puoi eliminare il tuo stesso account");
     }
@@ -253,14 +251,13 @@ async fn delete_user_handler(State(db): State<SharedDb>, Extension(claims): Exte
     }
 }
 
-
-pub fn router() -> Router<SharedDb> {
+pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/register", post(register_handler))
         .route("/api/login", post(login_handler))
 }
 
-pub fn admin_router() -> Router<SharedDb> {
+pub fn admin_router() -> Router<AppState> {
     Router::new()
         .route("/api/admin/register", post(register_by_admin_handler))
         .route("/api/admin/users/{user_id}", delete(delete_user_handler))

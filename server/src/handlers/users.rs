@@ -54,18 +54,21 @@ mod tests {
             surname: "".to_string(),
             email: "1".to_string(),
             password_hash: "xyz".to_string(),
+            is_admin: true
         }).unwrap();
         users_dao::insert_user(&connection, &crate::models::NewUser{
             name: "Giovanni".to_string(),
             surname: "".to_string(),
             email: "2".to_string(),
             password_hash: "xyz".to_string(),
+            is_admin: false
         }).unwrap();
         users_dao::insert_user(&connection, &crate::models::NewUser{
             name: "Luigi".to_string(),
             surname: "".to_string(),
             email: "3".to_string(),
             password_hash: "xyz".to_string(),
+            is_admin: false
         }).unwrap();
 
         let response = get_users_handler(State(connection)).await.into_response();

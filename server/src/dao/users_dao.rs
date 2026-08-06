@@ -8,16 +8,16 @@ fn row_to_user(row: &Row) -> Result<User> {
         name: row.get("name")?,
         surname: row.get("surname")?,
         email: row.get("email")?,
-        created_at: row.get("created_at")?, //DateTime<Utc> letto direttamente
+        created_at: row.get("created_at")?,
         is_admin: row.get::<_, i64>("is_admin")? != 0,
     })
 }
 
-pub fn insert_user(db: &SharedDb, new_user: &NewUser) -> Result<i64> { //la data viene inserita di default nel db
+pub fn insert_user(db: &SharedDb, new_user: &NewUser) -> Result<i64> {
     let conn = db.lock().unwrap();
     conn.execute(
         "INSERT INTO users (name, surname, email, password_hash, is_admin)
-        VALUES (?1, ?2, ?3, ?4)",
+        VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             &new_user.name,
             &new_user.surname,
@@ -42,7 +42,7 @@ pub fn get_credentials_by_email(db: &SharedDb, email: &str) -> Result<Option<(i6
 pub fn get_user_by_id(db: &SharedDb, user_id: i64) -> Result<Option<User>> {
     let conn = db.lock().unwrap();
     conn.query_row(
-        "SELECT id, name, surname, email, created_at
+        "SELECT id, name, surname, email, created_at, is_admin
          FROM users WHERE id = ?1",
         params![user_id],
         row_to_user,
@@ -63,7 +63,7 @@ pub fn email_exists(db: &SharedDb, email: &str) -> Result<bool> {
 pub fn get_all_users(db: &SharedDb) -> Result<Vec<User>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, name, surname, email, created_at
+        "SELECT id, name, surname, email, created_at, is_admin
          FROM users ORDER BY id",
     )?;
     let rows = stmt.query_map([], row_to_user)?;

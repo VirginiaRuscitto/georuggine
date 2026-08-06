@@ -1,23 +1,29 @@
 use chrono::{Datelike, Days, NaiveDate};
 use axum::{extract::State, extract::Query, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use tokio;
 use crate::{
+    state::AppState,
     database::connection::SharedDb,
     models::{MovementSession, RouteReport, Position, ReportPeriod, MovementState},
     dao::{movement_sessions_dao, position_log_dao}
 };
 
-pub struct ReportQuery { pub user_id: i64, pub period: ReportPeriod }
+#[derive(Deserialize)]
+pub struct ReportQuery { 
+    pub user_id: i64, 
+    pub period: ReportPeriod 
+}
 
 pub async fn get_report_handler(
-    State(db): State<SharedDb>,
+    State(state): State<AppState>,
     Query(params): Query<ReportQuery>,
 ) -> impl IntoResponse {
     let (start, end) = get_start_end_from_report_period(params.period);
 
-    let db_1 = db.clone();
-    let db_2 = db.clone();
+    let db_1 = state.db.clone();
+    let db_2 = state.db.clone();
     let user_id = params.user_id;
 
     // Pipeline 1: Fetch positions AND compute speed on Thread 1
@@ -147,14 +153,18 @@ pub fn compute_durations(sessions: &[MovementSession], default_end: DateTime<Utc
 #[cfg(test)]
 mod tests {
     use std::thread;
+    use std::collections::HashMap;
+    use std::sync::{Arc, RwLock};
     use axum::extract::{Query, State};
     use chrono::{Duration, Utc};
     use rusqlite::{params};
+    use rumqttc::{AsyncClient, MqttOptions};
     use tokio::time::Instant;
     use crate::dao::{movement_sessions_dao, position_log_dao, users_dao};
     use crate::database::connection::SharedDb;
     use crate::handlers::report::{get_report_handler, ReportQuery};
     use crate::models::{MovementState, NewUser, ReportPeriod};
+    use crate::state::AppState;
 
     pub fn clean_db(db: &SharedDb) {
         let mut conn = db.lock().unwrap();
@@ -223,6 +233,7 @@ mod tests {
                             surname: format!("Test{}", u),
                             email: format!("user{}@example.com", u),
                             password_hash: "hashed_pass_123".to_string(),
+                            is_admin: false, // <-- CORRETTO: aggiunto campo mancante
                         };
 
                         let user_id = users_dao::insert_user(db_ref, &new_user)
@@ -306,27 +317,36 @@ mod tests {
 
         let db: SharedDb = crate::database::connection::shared_connection().unwrap();
 
+        // <-- CORRETTO: creiamo un AppState compatibile con la nuova firma
+        let mqtt_options = MqttOptions::new("test_client", "127.0.0.1", 1883);
+        let (mqtt_client, _eventloop) = AsyncClient::new(mqtt_options, 10);
+        let app_state = AppState {
+            db: db.clone(),
+            active_users: Arc::new(RwLock::new(HashMap::new())),
+            mqtt_client,
+        };
+
         for u_id in 0..num_users as i64 {
             let query = ReportQuery {
                 user_id: u_id,
                 period: ReportPeriod::Day,
             };
 
-            let _response = get_report_handler(State(db.clone()), Query(query)).await;
+            let _response = get_report_handler(State(app_state.clone()), Query(query)).await;
 
             let query = ReportQuery {
                 user_id: u_id,
                 period: ReportPeriod::Week,
             };
 
-            let _response = get_report_handler(State(db.clone()), Query(query)).await;
+            let _response = get_report_handler(State(app_state.clone()), Query(query)).await;
 
             let query = ReportQuery {
                 user_id: u_id,
                 period: ReportPeriod::Month,
             };
 
-            let _response = get_report_handler(State(db.clone()), Query(query)).await;
+            let _response = get_report_handler(State(app_state.clone()), Query(query)).await;
         }
 
         let elapsed = start_time.elapsed();
