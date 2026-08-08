@@ -8,12 +8,13 @@ mod models;
 mod mqtt;
 mod state;
 
+use tower_http::cors::{Any, CorsLayer};
+use axum::http::{Method, header};
 use axum::routing::{get, post};
 use axum::Router;
 use rumqttc::{AsyncClient, MqttOptions};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use tower_http::cors::{Any, CorsLayer};
 
 use database::connection::SharedDb;
 use state::{ActiveUsers, AppState};
@@ -38,13 +39,24 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    .allow_origin(Any)
+    .allow_methods([
+        Method::GET,
+        Method::POST,
+        Method::PUT,
+        Method::DELETE,
+        Method::OPTIONS,
+    ])
+    .allow_headers([
+        header::AUTHORIZATION,
+        header::CONTENT_TYPE,
+        header::ACCEPT,
+    ]);
 
     let app = Router::new()
         .merge(auth::router())
         .merge(auth::admin_router())
+        .merge(auth::protected_router())
         .route("/api/users", get(handlers::users::get_users_handler))
         .route("/api/messages", get(handlers::messages::get_messages_handler))
         .route("/api/broadcast", post(handlers::messages::post_broadcast_handler))

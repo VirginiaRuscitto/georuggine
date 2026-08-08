@@ -5,6 +5,7 @@ use crate::{
     database::connection::SharedDb,
     dao::users_dao,
     state::ActiveUsers,
+    state::AppState,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -16,7 +17,9 @@ pub struct UserStatus {
 
 /// GET /api/users
 /// Ritorna la lista completa degli utenti registrati.
-pub async fn get_users_handler(State(db): State<SharedDb>, active: ActiveUsers) -> impl IntoResponse{
+pub async fn get_users_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let db = state.db;
+    let active = state.active_users;
 
     let users = match users_dao::get_all_users(&db) {
         Ok(u) => u,

@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{post, delete},
+    routing::{post, delete, get},
     Json,
     Router,
 };
@@ -20,7 +20,9 @@ use crate::errors::error_response;
 use crate::dao::users_dao;
 use crate::database::connection::SharedDb;
 use crate::models::{NewUser, User};
-use crate::state::AppState;  // <-- NUOVO: importa AppState
+use crate::state::AppState;
+use crate::handlers::messages::get_conversation_handler;
+use crate::handlers::messages::post_direct_message;
 
 fn jwt_secret() -> &'static [u8] {
     static SECRET: OnceLock<Vec<u8>> = OnceLock::new();
@@ -237,6 +239,20 @@ async fn login_handler(State(db): State<SharedDb>, Json(body): Json<LoginRequest
     }
 }
 
+async fn me_handler(
+    Extension(claims): Extension<Claims>,
+    State(db): State<SharedDb>,
+) -> Response {
+    match users_dao::get_user_by_id(&db, claims.sub) {
+        Ok(Some(user)) => (StatusCode::OK, Json(user)).into_response(),
+        Ok(None) => error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
+        Err(e) => {
+            tracing::error!("errore get_user_by_id: {e}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore server")
+        }
+    }
+}
+
 async fn delete_user_handler(State(db): State<SharedDb>, Extension(claims): Extension<Claims>, Path(user_id): Path<i64>) -> Response {
     if claims.sub == user_id {
         return error_response(StatusCode::BAD_REQUEST, "Non puoi eliminare il tuo stesso account");
@@ -255,6 +271,14 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/register", post(register_handler))
         .route("/api/login", post(login_handler))
+}
+
+pub fn protected_router() -> Router<AppState> {
+    Router::new()
+        .route("/api/me", get(me_handler))
+        .route("/api/messages/conversation", get(get_conversation_handler))
+        .route("/api/messages/direct", post(post_direct_message))
+        .layer(middleware::from_fn(jwt_auth_middleware))
 }
 
 pub fn admin_router() -> Router<AppState> {
