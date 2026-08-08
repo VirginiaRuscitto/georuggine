@@ -19,6 +19,7 @@ use validator::Validate;
 use crate::errors::error_response;
 use crate::dao::users_dao;
 use crate::database::connection::SharedDb;
+use crate::handlers;
 use crate::models::{NewUser, User};
 use crate::state::AppState;
 use crate::handlers::messages::get_conversation_handler;
@@ -285,5 +286,7 @@ pub fn admin_router() -> Router<AppState> {
     Router::new()
         .route("/api/admin/register", post(register_by_admin_handler))
         .route("/api/admin/users/{user_id}", delete(delete_user_handler))
+        .route("/api/users", get(handlers::users::get_users_handler))
+        .route("/api/report", get(handlers::report::get_report_handler))
         .layer(middleware::from_fn(jwt_admin_middleware))
 }

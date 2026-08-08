@@ -57,10 +57,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(auth::router())
         .merge(auth::admin_router())
         .merge(auth::protected_router())
-        .route("/api/users", get(handlers::users::get_users_handler))
         .route("/api/messages", get(handlers::messages::get_messages_handler))
         .route("/api/broadcast", post(handlers::messages::post_broadcast_handler))
-        .route("/api/report", get(handlers::report::get_report_handler))
         .layer(cors)
         .with_state(app_state);
 

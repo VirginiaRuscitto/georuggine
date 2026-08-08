@@ -1,12 +1,12 @@
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{extract::State, middleware, response::IntoResponse, Json, Router};
+use axum::routing::{delete, post};
 use serde::{Deserialize, Serialize};
 use crate::{
     models::UserState,
-    database::connection::SharedDb,
     dao::users_dao,
-    state::ActiveUsers,
     state::AppState,
 };
+use crate::auth::jwt_admin_middleware;
 
 #[derive(Serialize, Deserialize)]
 pub struct UserStatus {
@@ -50,16 +50,38 @@ pub async fn get_users_handler(State(state): State<AppState>) -> impl IntoRespon
 mod tests {
     use axum::response::IntoResponse;
     use axum::extract::State;
+    use rumqttc::{AsyncClient, MqttOptions};
     use crate::handlers::users::{get_users_handler, UserStatus};
     use crate::dao::users_dao;
     use crate::database::connection::SharedDb;
     use crate::models::UserState;
-    use crate::state::ActiveUsers;
+    use crate::state::{ActiveUsers, AppState};
     use crate::state::UserSession;
+
+    pub fn clean_db(db: &SharedDb) {
+        let mut conn = db.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+
+        // 1. Delete contents in reverse order of table relationships (children first)
+        tx.execute("DELETE FROM position_log", []);
+        tx.execute("DELETE FROM movement_sessions", []);
+        tx.execute("DELETE FROM users", []);
+
+        // 2. Reset AUTOINCREMENT sequence counters back to 1
+        tx.execute(
+            "DELETE FROM sqlite_sequence WHERE name IN ('users', 'movement_sessions', 'position_log')",
+            [],
+        )
+            .ok(); // .ok() prevents failure if sqlite_sequence table hasn't been created yet
+
+        tx.commit();
+    }
 
     #[tokio::test]
     async fn users_test() {
         let connection: SharedDb = crate::database::connection::shared_connection().unwrap();
+
+        clean_db(&connection);
 
         let id1 = users_dao::insert_user(&connection, &crate::models::NewUser{
             name: "Giacomo".to_string(),
@@ -99,7 +121,15 @@ mod tests {
             });
         }
 
-        let response = get_users_handler( State(connection), active_users).await.into_response();
+        let mqtt_options = MqttOptions::new("test_client", "127.0.0.1", 1883);
+        let (mqtt_client, _eventloop) = AsyncClient::new(mqtt_options, 10);
+        let state = AppState{
+            db: connection,
+            active_users,
+            mqtt_client,
+        };
+
+        let response = get_users_handler( State(state) ).await.into_response();
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 

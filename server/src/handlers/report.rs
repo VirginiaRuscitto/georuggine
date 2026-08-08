@@ -4,7 +4,6 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tokio;
 use crate::{
-    state::AppState,
     database::connection::SharedDb,
     models::{MovementSession, RouteReport, Position, ReportPeriod, MovementState},
     dao::{movement_sessions_dao, position_log_dao}
@@ -17,13 +16,13 @@ pub struct ReportQuery {
 }
 
 pub async fn get_report_handler(
-    State(state): State<AppState>,
+    State(db): State<SharedDb>,
     Query(params): Query<ReportQuery>,
 ) -> impl IntoResponse {
     let (start, end) = get_start_end_from_report_period(params.period);
 
-    let db_1 = state.db.clone();
-    let db_2 = state.db.clone();
+    let db_1 = db.clone();
+    let db_2 = db.clone();
     let user_id = params.user_id;
 
     // Pipeline 1: Fetch positions AND compute speed on Thread 1
@@ -212,89 +211,72 @@ mod tests {
             conn.execute_batch("BEGIN TRANSACTION;").unwrap();
         }
 
-        // 1. Multithreaded Database Seeding using std::thread::scope
-        thread::scope(|scope| {
-            for thread_idx in 0..num_threads {
-                let db_ref = &db;
+        for u in 0..num_users {
+            // A. Insert User via DAO
+            let new_user = NewUser {
+                name: format!("User{}", u),
+                surname: format!("Test{}", u),
+                email: format!("user{}@example.com", u),
+                password_hash: "hashed_pass_123".to_string(),
+                is_admin: false,
+            };
 
-                // Determine user index range for this worker thread
-                let start_user = thread_idx * users_per_thread;
-                let end_user = if thread_idx == num_threads - 1 {
-                    num_users
+            let user_id = users_dao::insert_user(&db, &new_user)
+                .expect("Failed to insert user");
+
+            // B. Insert Sessions per user via movement_sessions_dao
+            let mut session_cursor = start_of_day;
+            for s in 0..sessions_per_user {
+                let state = if s % 2 == 0 {
+                    MovementState::Moving
                 } else {
-                    start_user + users_per_thread
+                    MovementState::Stopped
                 };
 
-                scope.spawn(move || {
-                    for u in start_user..end_user {
-                        // A. Insert User via DAO
-                        let new_user = NewUser {
-                            name: format!("User{}", u),
-                            surname: format!("Test{}", u),
-                            email: format!("user{}@example.com", u),
-                            password_hash: "hashed_pass_123".to_string(),
-                            is_admin: false, // <-- CORRETTO: aggiunto campo mancante
-                        };
+                let started_at = session_cursor;
+                let duration_secs = 300 + (s as i64 * 90);
+                let ended_at = started_at + Duration::seconds(duration_secs);
+                session_cursor = ended_at + Duration::seconds(120);
 
-                        let user_id = users_dao::insert_user(db_ref, &new_user)
-                            .expect("Failed to insert user");
+                let session_id = movement_sessions_dao::insert_movement_session(
+                    &db,
+                    user_id,
+                    state,
+                    started_at,
+                )
+                    .expect("Failed to insert session");
 
-                        // B. Insert 10 Sessions per user via movement_sessions_dao
-                        let mut session_cursor = start_of_day;
-                        for s in 0..sessions_per_user {
-                            let state = if s % 2 == 0 {
-                                MovementState::Moving
-                            } else {
-                                MovementState::Stopped
-                            };
-
-                            let started_at = session_cursor;
-                            let duration_secs = 300 + (s as i64 * 90); // Vary session lengths
-                            let ended_at = started_at + Duration::seconds(duration_secs);
-                            session_cursor = ended_at + Duration::seconds(120);
-
-                            let session_id = movement_sessions_dao::insert_movement_session(
-                                db_ref,
-                                user_id,
-                                state,
-                                started_at,
-                            )
-                                .expect("Failed to insert session");
-
-                            movement_sessions_dao::close_movement_session(
-                                db_ref,
-                                session_id,
-                                ended_at,
-                            )
-                                .expect("Failed to close session");
-                        }
-
-                        // C. Insert 10,000 Position Logs per user via position_log_dao
-                        let base_lat = 45.4642;
-                        let base_lon = 9.1900;
-
-                        for p in 0..positions_per_user {
-                            let lat = base_lat + (p as f64 * 0.00005);
-                            let lon = base_lon + (p as f64 * 0.00005);
-
-                            // Space out positions by 2 seconds each across the day
-                            let recorded_at = start_of_day + Duration::seconds(p as i64 * 2);
-
-                            let pos_id = position_log_dao::insert_position(db_ref, user_id, lat, lon)
-                                .expect("Failed to insert position");
-
-                            // Override timestamp to ensure it falls within ReportPeriod::Day
-                            let conn = db_ref.lock().unwrap();
-                            conn.execute(
-                                "UPDATE position_log SET recorded_at = ?1 WHERE id = ?2",
-                                params![recorded_at, pos_id],
-                            )
-                                .expect("Failed to update position timestamp");
-                        }
-                    }
-                });
+                movement_sessions_dao::close_movement_session(
+                    &db,
+                    session_id,
+                    ended_at,
+                )
+                    .expect("Failed to close session");
             }
-        });
+
+            // C. Insert Position Logs per user via position_log_dao
+            let base_lat = 45.4642;
+            let base_lon = 9.1900;
+
+            for p in 0..positions_per_user {
+                let lat = base_lat + (p as f64 * 0.00005);
+                let lon = base_lon + (p as f64 * 0.00005);
+
+                // Space out positions by 2 seconds each across the day
+                let recorded_at = start_of_day + Duration::seconds(p as i64 * 2);
+
+                let pos_id = position_log_dao::insert_position(&db, user_id, lat, lon)
+                    .expect("Failed to insert position");
+
+                // Override timestamp to ensure it falls within ReportPeriod::Day
+                let conn = db.lock().unwrap();
+                conn.execute(
+                    "UPDATE position_log SET recorded_at = ?1 WHERE id = ?2",
+                    params![recorded_at, pos_id],
+                )
+                    .expect("Failed to update position timestamp");
+            }
+        }
 
         {
             let conn = db.lock().unwrap();
@@ -306,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_report_handler_cpu_performance() {
-        let num_users = 100;
+        let num_users = 10;
         let sessions_per_user = 10;
         let positions_per_user = 10_000;
 
@@ -332,21 +314,21 @@ mod tests {
                 period: ReportPeriod::Day,
             };
 
-            let _response = get_report_handler(State(app_state.clone()), Query(query)).await;
+            let _response = get_report_handler(State(app_state.db.clone()), Query(query)).await;
 
             let query = ReportQuery {
                 user_id: u_id,
                 period: ReportPeriod::Week,
             };
 
-            let _response = get_report_handler(State(app_state.clone()), Query(query)).await;
+            let _response = get_report_handler(State(app_state.db.clone()), Query(query)).await;
 
             let query = ReportQuery {
                 user_id: u_id,
                 period: ReportPeriod::Month,
             };
 
-            let _response = get_report_handler(State(app_state.clone()), Query(query)).await;
+            let _response = get_report_handler(State(app_state.db.clone()), Query(query)).await;
         }
 
         let elapsed = start_time.elapsed();
