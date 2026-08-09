@@ -40,6 +40,7 @@ pub struct Position {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
 pub enum ReportPeriod {
     Day,
     Week,

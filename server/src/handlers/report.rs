@@ -1,12 +1,21 @@
-use chrono::{Datelike, Days, NaiveDate};
-use axum::{extract::State, extract::Query, response::IntoResponse, Json};
-use chrono::{DateTime, Utc};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    middleware,
+    response::{IntoResponse, Response},
+    routing::get,
+    Json,
+    Router,
+};
+use chrono::{DateTime, Datelike, Days, NaiveDate, Utc};
 use serde::Deserialize;
-use tokio;
 use crate::{
+    auth,
+    dao::{movement_sessions_dao, position_log_dao},
     database::connection::SharedDb,
-    models::{MovementSession, RouteReport, Position, ReportPeriod, MovementState},
-    dao::{movement_sessions_dao, position_log_dao}
+    errors::error_response,
+    models::{MovementSession, MovementState, Position, ReportPeriod, RouteReport},
+    state::AppState,
 };
 
 #[derive(Deserialize)]
@@ -15,42 +24,32 @@ pub struct ReportQuery {
     pub period: ReportPeriod 
 }
 
-pub async fn get_report_handler(
-    State(db): State<SharedDb>,
-    Query(params): Query<ReportQuery>,
-) -> impl IntoResponse {
+pub async fn get_report_handler(State(db): State<SharedDb>, Query(params): Query<ReportQuery>) -> Response {
     let (start, end) = get_start_end_from_report_period(params.period);
 
-    let db_1 = db.clone();
-    let db_2 = db.clone();
-    let user_id = params.user_id;
+    let positions = match position_log_dao::get_positions_in_range(&db, params.user_id, start, end) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("errore get_positions_in_range: {e}");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile calcolare il tragitto");
+        }
+    };
 
-    // Pipeline 1: Fetch positions AND compute speed on Thread 1
-    let position_pipeline = tokio::task::spawn_blocking(move || {
-        let positions = position_log_dao::get_positions_in_range(&db_1, user_id, start, end)?;
-        let avg_speed_kmh = compute_avg_speed_kmh(&positions);
+    let sessions = match movement_sessions_dao::get_sessions_in_range(&db, params.user_id, start, end) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("errore get_sessions_in_range: {e}");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile calcolare le durate del movimento e delle pause");
+        }
+    };
 
-        Ok::<(Vec<Position>, f64), rusqlite::Error>((positions, avg_speed_kmh))
-    });
-
-    // Pipeline 2: Fetch sessions AND compute time durations on Thread 2
-    let session_pipeline = tokio::task::spawn_blocking(move || {
-        let sessions = movement_sessions_dao::get_sessions_in_range(&db_2, user_id, start, end)?;
-        let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, end);
-
-        Ok::<(i64, i64), rusqlite::Error>((movement_duration_secs, pause_duration_secs))
-    });
-
-    // Run both entire pipelines concurrently
-    let (pos_res, sess_res) = tokio::join!(position_pipeline, session_pipeline);
-
-    let (trajectory, avg_speed_kmh) = pos_res.unwrap().unwrap();
-    let (movement_duration_secs, pause_duration_secs) = sess_res.unwrap().unwrap();
+    let avg_speed_kmh = compute_avg_speed_kmh(&positions);
+    let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, end);
 
     let report = RouteReport {
         user_id: params.user_id,
         period: params.period,
-        trajectory,
+        trajectory: positions,
         avg_speed_kmh,
         movement_duration_secs,
         pause_duration_secs,
@@ -149,193 +148,8 @@ pub fn compute_durations(sessions: &[MovementSession], default_end: DateTime<Utc
         })
 }
 
-#[cfg(test)]
-mod tests {
-    use std::thread;
-    use std::collections::HashMap;
-    use std::sync::{Arc, RwLock};
-    use axum::extract::{Query, State};
-    use chrono::{Duration, Utc};
-    use rusqlite::{params};
-    use rumqttc::{AsyncClient, MqttOptions};
-    use tokio::time::Instant;
-    use crate::dao::{movement_sessions_dao, position_log_dao, users_dao};
-    use crate::database::connection::SharedDb;
-    use crate::handlers::report::{get_report_handler, ReportQuery};
-    use crate::models::{MovementState, NewUser, ReportPeriod};
-    use crate::state::AppState;
-
-    pub fn clean_db(db: &SharedDb) {
-        let mut conn = db.lock().unwrap();
-        let tx = conn.transaction().unwrap();
-
-        // 1. Delete contents in reverse order of table relationships (children first)
-        tx.execute("DELETE FROM position_log", []);
-        tx.execute("DELETE FROM movement_sessions", []);
-        tx.execute("DELETE FROM users", []);
-
-        // 2. Reset AUTOINCREMENT sequence counters back to 1
-        tx.execute(
-            "DELETE FROM sqlite_sequence WHERE name IN ('users', 'movement_sessions', 'position_log')",
-            [],
-        )
-            .ok(); // .ok() prevents failure if sqlite_sequence table hasn't been created yet
-
-        tx.commit();
-    }
-    fn populate_db( num_users: usize, sessions_per_user: usize, positions_per_user: usize ){
-        let db: SharedDb = crate::database::connection::shared_connection().unwrap();
-
-        clean_db(&db);
-
-        let mut rng = rand::thread_rng();
-
-        // Start time set to 00:00:00 UTC of current day to match ReportPeriod::Day
-        let start_of_day = Utc::now()
-            .date_naive()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc();
-
-        // Calculate available CPU threads
-        let num_threads = thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-        let users_per_thread = num_users / num_threads;
-
-        let seeding_start = Instant::now();
-
-        // Batch insertions into a single transaction to drastically speed up setup
-        {
-            let conn = db.lock().unwrap();
-            conn.execute_batch("BEGIN TRANSACTION;").unwrap();
-        }
-
-        for u in 0..num_users {
-            // A. Insert User via DAO
-            let new_user = NewUser {
-                name: format!("User{}", u),
-                surname: format!("Test{}", u),
-                email: format!("user{}@example.com", u),
-                password_hash: "hashed_pass_123".to_string(),
-                is_admin: false,
-            };
-
-            let user_id = users_dao::insert_user(&db, &new_user)
-                .expect("Failed to insert user");
-
-            // B. Insert Sessions per user via movement_sessions_dao
-            let mut session_cursor = start_of_day;
-            for s in 0..sessions_per_user {
-                let state = if s % 2 == 0 {
-                    MovementState::Moving
-                } else {
-                    MovementState::Stopped
-                };
-
-                let started_at = session_cursor;
-                let duration_secs = 300 + (s as i64 * 90);
-                let ended_at = started_at + Duration::seconds(duration_secs);
-                session_cursor = ended_at + Duration::seconds(120);
-
-                let session_id = movement_sessions_dao::insert_movement_session(
-                    &db,
-                    user_id,
-                    state,
-                    started_at,
-                )
-                    .expect("Failed to insert session");
-
-                movement_sessions_dao::close_movement_session(
-                    &db,
-                    session_id,
-                    ended_at,
-                )
-                    .expect("Failed to close session");
-            }
-
-            // C. Insert Position Logs per user via position_log_dao
-            let base_lat = 45.4642;
-            let base_lon = 9.1900;
-
-            for p in 0..positions_per_user {
-                let lat = base_lat + (p as f64 * 0.00005);
-                let lon = base_lon + (p as f64 * 0.00005);
-
-                // Space out positions by 2 seconds each across the day
-                let recorded_at = start_of_day + Duration::seconds(p as i64 * 2);
-
-                let pos_id = position_log_dao::insert_position(&db, user_id, lat, lon)
-                    .expect("Failed to insert position");
-
-                // Override timestamp to ensure it falls within ReportPeriod::Day
-                let conn = db.lock().unwrap();
-                conn.execute(
-                    "UPDATE position_log SET recorded_at = ?1 WHERE id = ?2",
-                    params![recorded_at, pos_id],
-                )
-                    .expect("Failed to update position timestamp");
-            }
-        }
-
-        {
-            let conn = db.lock().unwrap();
-            conn.execute_batch("COMMIT;").unwrap();
-        }
-
-        println!("Multithreaded seeding completed in: {:?}", seeding_start.elapsed());
-    }
-
-    #[tokio::test]
-    async fn test_get_report_handler_cpu_performance() {
-        let num_users = 10;
-        let sessions_per_user = 10;
-        let positions_per_user = 10_000;
-
-        populate_db(num_users, sessions_per_user,positions_per_user);
-
-        // 4. Run `get_report_handler` and measure process CPU time
-        let start_time = Instant::now();
-
-        let db: SharedDb = crate::database::connection::shared_connection().unwrap();
-
-        // <-- CORRETTO: creiamo un AppState compatibile con la nuova firma
-        let mqtt_options = MqttOptions::new("test_client", "127.0.0.1", 1883);
-        let (mqtt_client, _eventloop) = AsyncClient::new(mqtt_options, 10);
-        let app_state = AppState {
-            db: db.clone(),
-            active_users: Arc::new(RwLock::new(HashMap::new())),
-            mqtt_client,
-        };
-
-        for u_id in 0..num_users as i64 {
-            let query = ReportQuery {
-                user_id: u_id,
-                period: ReportPeriod::Day,
-            };
-
-            let _response = get_report_handler(State(app_state.db.clone()), Query(query)).await;
-
-            let query = ReportQuery {
-                user_id: u_id,
-                period: ReportPeriod::Week,
-            };
-
-            let _response = get_report_handler(State(app_state.db.clone()), Query(query)).await;
-
-            let query = ReportQuery {
-                user_id: u_id,
-                period: ReportPeriod::Month,
-            };
-
-            let _response = get_report_handler(State(app_state.db.clone()), Query(query)).await;
-        }
-
-        let elapsed = start_time.elapsed();
-
-        // 5. Output measured performance
-        println!("\n==============================================");
-        println!("Execution time of 'get_report_handler': {:?}", elapsed);
-        println!("==============================================\n");
-    }
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/report", get(get_report_handler))
+        .layer(middleware::from_fn(auth::jwt_admin_middleware))
 }

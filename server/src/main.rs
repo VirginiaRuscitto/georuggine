@@ -55,10 +55,9 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .merge(auth::router())
-        .merge(auth::admin_router())
-        .merge(auth::protected_router())
-        .route("/api/messages", get(handlers::messages::get_messages_handler))
-        .route("/api/broadcast", post(handlers::messages::post_broadcast_handler))
+        .merge(handlers::messages::router())
+        .merge(handlers::users::router())
+        .merge(handlers::report::router())
         .layer(cors)
         .with_state(app_state);
 
@@ -67,8 +66,14 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Task di background ---
     tokio::spawn(logging::cpu_logging_task());
-    tokio::spawn(mqtt::handler::start_mqtt_listener(eventloop, db, active_users, mqtt_client));
-
+    tokio::spawn(mqtt::handler::start_mqtt_listener(
+        eventloop,
+        db.clone(),
+        active_users.clone(),
+        mqtt_client.clone(),
+    ));
+    tokio::spawn(mqtt::handler::stale_state_watcher(active_users, db, mqtt_client));
+    
     axum::serve(listener, app).await?;
     Ok(())
 }

@@ -42,6 +42,12 @@ pub fn get_open_movement_session(db: &SharedDb, user_id: i64) -> Result<Option<M
     .optional()
 }
 
+pub fn transition_session(db: &SharedDb, user_id: i64, new_state: MovementState, at: DateTime<Utc>) -> Result<()> {
+    close_movement_session(db, user_id, at)?;
+    insert_movement_session(db, user_id, new_state, at)?;
+    Ok(())
+}
+
 pub fn get_sessions_in_range(db: &SharedDb, user_id: i64, from: DateTime<Utc>, to: DateTime<Utc>,) -> Result<Vec<MovementSession>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(

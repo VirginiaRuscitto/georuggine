@@ -21,8 +21,6 @@ use crate::dao::users_dao;
 use crate::database::connection::SharedDb;
 use crate::models::{NewUser, User};
 use crate::state::AppState;
-use crate::handlers::messages::get_conversation_handler;
-use crate::handlers::messages::post_direct_message;
 
 fn jwt_secret() -> &'static [u8] {
     static SECRET: OnceLock<Vec<u8>> = OnceLock::new();
@@ -135,7 +133,7 @@ fn validate_password(password: &str) -> bool {
 }
 
 async fn register_handler(State(db): State<SharedDb>, Json(body): Json<RegisterRequest>) -> Response {
-    let user = match create_user(&db, body, true) {
+    let user = match create_user(&db, body, false) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -248,7 +246,7 @@ async fn me_handler(
         Ok(None) => error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
         Err(e) => {
             tracing::error!("errore get_user_by_id: {e}");
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore server")
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore del server")
         }
     }
 }
@@ -301,17 +299,17 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/register", post(register_handler))
         .route("/api/login", post(login_handler))
+        .merge(protected_router())
+        .merge(admin_router())
 }
 
-pub fn protected_router() -> Router<AppState> {
+fn protected_router() -> Router<AppState> {
     Router::new()
         .route("/api/me", get(me_handler))
-        .route("/api/messages/direct", post(post_direct_message))
-        .route("/api/messages/conversation", get(get_conversation_handler))
         .layer(middleware::from_fn(jwt_auth_middleware))
 }
 
-pub fn admin_router() -> Router<AppState> {
+fn admin_router() -> Router<AppState> {
     Router::new()
         .route("/api/admin/register", post(register_by_admin_handler))
         .route("/api/admin/users/:user_id", delete(delete_user_handler))

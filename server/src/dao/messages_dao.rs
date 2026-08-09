@@ -61,29 +61,3 @@ pub fn get_messages(db: &SharedDb, with: Option<i64>, limit: i64) -> Result<Vec<
     };
     rows.collect()
 }
-
-//a differenza della precedente restituisce tutta la history
-pub fn get_all_messages(db: &SharedDb, with: Option<i64>,) -> Result<Vec<Message>> {
-    let conn = db.lock().unwrap();
-    let mut stmt = match with {
-        Some(_) => conn.prepare(
-            "SELECT id, sender_id, recipient_id, content, sent_at
-             FROM messages
-             WHERE sender_id = ?1 OR recipient_id = ?1
-             ORDER BY sent_at DESC",
-        )?,
-        None => conn.prepare(
-            "SELECT id, sender_id, recipient_id, content, sent_at
-             FROM messages
-             WHERE recipient_id IS NULL
-             ORDER BY sent_at DESC",
-        )?,
-    };
-
-    let rows = match with {
-        Some(user_id) => stmt.query_map(params![user_id], row_to_message)?,
-        None => stmt.query_map([], row_to_message)?,
-    };
-
-    rows.collect()
-}
