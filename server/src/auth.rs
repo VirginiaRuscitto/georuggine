@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{post, delete, get},
+    routing::{post, delete, get, put},
     Json,
     Router,
 };
@@ -135,7 +135,7 @@ fn validate_password(password: &str) -> bool {
 }
 
 async fn register_handler(State(db): State<SharedDb>, Json(body): Json<RegisterRequest>) -> Response {
-    let user = match create_user(&db, body, false) {
+    let user = match create_user(&db, body, true) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -267,6 +267,36 @@ async fn delete_user_handler(State(db): State<SharedDb>, Extension(claims): Exte
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct UpdateAdminRequest {
+    is_admin: bool,
+}
+
+async fn update_user_admin_handler(
+    State(db): State<SharedDb>,
+    Extension(claims): Extension<Claims>,
+    Path(user_id): Path<i64>,
+    Json(body): Json<UpdateAdminRequest>,
+) -> Response {
+    if claims.sub == user_id {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Non puoi modificare il tuo stesso account",
+        );
+    }
+    match users_dao::set_user_admin(&db, user_id, body.is_admin) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
+        Err(e) => {
+            tracing::error!("errore update admin utente: {e}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile aggiornare l'utente. Riprova più tardi",
+            )
+        }
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/register", post(register_handler))
@@ -276,14 +306,15 @@ pub fn router() -> Router<AppState> {
 pub fn protected_router() -> Router<AppState> {
     Router::new()
         .route("/api/me", get(me_handler))
-        .route("/api/messages/conversation", get(get_conversation_handler))
         .route("/api/messages/direct", post(post_direct_message))
+        .route("/api/messages/conversation", get(get_conversation_handler))
         .layer(middleware::from_fn(jwt_auth_middleware))
 }
 
 pub fn admin_router() -> Router<AppState> {
     Router::new()
         .route("/api/admin/register", post(register_by_admin_handler))
-        .route("/api/admin/users/{user_id}", delete(delete_user_handler))
+        .route("/api/admin/users/:user_id", delete(delete_user_handler))
+        .route("/api/admin/users/:user_id/admin", put(update_user_admin_handler))
         .layer(middleware::from_fn(jwt_admin_middleware))
 }

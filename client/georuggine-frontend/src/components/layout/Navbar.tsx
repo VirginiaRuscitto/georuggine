@@ -1,20 +1,19 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Home, MessageSquare, LogOut, MapPin } from 'lucide-react';
+import { Home, MessageSquare, LogOut, LayoutDashboard, Users, BarChart3 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
-interface NavbarProps {
-  activePage?: 'home' | 'messages';
-}
-
-export default function Navbar({ activePage = 'home' }: NavbarProps) {
+export default function Navbar() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const location = useLocation();
+  const { logout, isAdmin } = useAuth();
 
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
+
+  const isActive = (path: string) => location.pathname === path;
 
   return (
     <motion.nav
@@ -34,18 +33,49 @@ export default function Navbar({ activePage = 'home' }: NavbarProps) {
 
         {/* Nav Links */}
         <div className="flex items-center gap-1">
-          <NavButton
-            icon={<Home size={18} />}
-            label="Home"
-            active={activePage === 'home'}
-            onClick={() => navigate('/')}
-          />
-          <NavButton
-            icon={<MessageSquare size={18} />}
-            label="Messaggi"
-            active={activePage === 'messages'}
-            onClick={() => navigate('/messages')}
-          />
+          {isAdmin ? (
+            <>
+              <NavButton
+                icon={<LayoutDashboard size={18} />}
+                label="Dashboard"
+                active={isActive('/admin')}
+                onClick={() => navigate('/admin')}
+              />
+              <NavButton
+                icon={<Users size={18} />}
+                label="Utenti"
+                active={isActive('/admin/users')}
+                onClick={() => navigate('/admin/users')}
+              />
+              <NavButton
+                icon={<MessageSquare size={18} />}
+                label="Messaggi"
+                active={isActive('/admin/messages')}
+                onClick={() => navigate('/admin/messages')}
+              />
+              <NavButton
+                icon={<BarChart3 size={18} />}
+                label="Report"
+                active={isActive('/admin/reports')}
+                onClick={() => navigate('/admin/reports')}
+              />
+            </>
+          ) : (
+            <>
+              <NavButton
+                icon={<Home size={18} />}
+                label="Home"
+                active={isActive('/')}
+                onClick={() => navigate('/')}
+              />
+              <NavButton
+                icon={<MessageSquare size={18} />}
+                label="Messaggi"
+                active={isActive('/messages')}
+                onClick={() => navigate('/messages')}
+              />
+            </>
+          )}
         </div>
 
         {/* Logout */}

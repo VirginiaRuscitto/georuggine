@@ -21,8 +21,8 @@ export default function LoginForm() {
 
     try {
       const response = await api.post('/api/login', { email, password });
-      login(response.data.token);
-      navigate('/'); // <-- AGGIUNGI QUESTA RIGA
+      const isAdmin = login(response.data.token);
+      navigate(isAdmin ? '/admin' : '/');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Errore durante il login');
     } finally {

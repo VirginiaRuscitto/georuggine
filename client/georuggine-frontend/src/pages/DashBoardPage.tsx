@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import Navbar from '../components/layout/Navbar';
 import UserSidebar from '../components/dashboard/UserSidebar';
 import MapView from '../components/dashboard/MapView';
+import AnimatedBackground from '../components/ui/AnimatedBackground';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
 import type { User } from '../types';
@@ -51,10 +52,11 @@ export default function DashboardPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navbar activePage="home" />
-      
-      <div className="pt-20 h-screen flex gap-6 px-6 pb-6">
+    <div className="min-h-screen relative">
+      <AnimatedBackground />
+      <Navbar/>
+
+      <div className="relative z-10 pt-20 h-screen flex gap-6 px-6 pb-6">
         {loading ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />

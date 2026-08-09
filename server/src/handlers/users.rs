@@ -13,6 +13,7 @@ pub struct UserStatus {
     pub id: i64,
     pub username: String,
     pub state: UserState, // "Disconnected" | "Stopped" | "Moving"
+    pub is_admin: bool,
 }
 
 /// GET /api/users
@@ -39,7 +40,8 @@ pub async fn get_users_handler(State(state): State<AppState>) -> impl IntoRespon
             state: match users_states.get(&u.id){
                 Some(T) => T.state,
                 None => UserState::Disconnected
-            }
+            },
+            is_admin: u.is_admin,
         })
         .collect();
 

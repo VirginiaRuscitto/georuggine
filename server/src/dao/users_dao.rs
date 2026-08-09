@@ -78,3 +78,12 @@ pub fn delete_user(db: &SharedDb, user_id: i64) -> Result<bool> {
     )?;
     Ok(rows_affected > 0)
 }
+
+pub fn set_user_admin(db: &SharedDb, user_id: i64, is_admin: bool) -> Result<bool> {
+    let conn = db.lock().unwrap();
+    let rows_affected = conn.execute(
+        "UPDATE users SET is_admin = ?1 WHERE id = ?2",
+        params![is_admin as i64, user_id],
+    )?;
+    Ok(rows_affected > 0)
+}
