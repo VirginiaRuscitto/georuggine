@@ -4,8 +4,9 @@ use crate::state::{ActiveUsers, UserSession};
 use chrono::{DateTime, Utc};
 use rumqttc::{AsyncClient, Event, EventLoop, Packet, QoS};
 use serde::Deserialize;
-use crate::dao::messages_dao;
+use crate::dao::{messages_dao, movement_sessions_dao, position_log_dao};
 
+pub const STALE_AFTER_SECS: i64 = 180;
 
 #[derive(Deserialize)]
 pub struct PositionUpdatePayload {
@@ -51,22 +52,10 @@ pub async fn handle_position_update(
     mqtt_client: &AsyncClient,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let now = Utc::now();
-    let new_pos = Position {
-        lat,
-        lon,
-        recorded_at: now,
-    };
+    let new_pos = Position { lat, lon, recorded_at: now };
 
-    // 1. Salvataggio della posizione nel DB (position_log)
-    {
-        let conn = db.lock().unwrap();
-        conn.execute(
-            "INSERT INTO position_log (user_id, lat, lon, recorded_at) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![user_id, lat, lon, now.to_rfc3339()],
-        )?;
-    }
+    position_log_dao::insert_position(db, user_id, lat, lon, now)?;
 
-    // 2. Controllo transizione di stato in memoria
     let mut transition_to: Option<UserState> = None;
     {
         let mut users = active.write().unwrap();
@@ -91,36 +80,16 @@ pub async fn handle_position_update(
         session.last_position = Some(new_pos);
     }
 
-    // 3. Se lo stato è cambiato, aggiorna la sessione nel DB e notifica via MQTT
     if let Some(new_state) = transition_to {
-        // Mappiamo UserState (usato in RAM) su MovementState (usato per il DB)
-        let movement_state = match new_state {
-            UserState::Disconnected | UserState::Stopped => MovementState::Stopped,
-            UserState::Moving => MovementState::Moving,
-        };
+        let movement_state = MovementState::from(new_state);
+        movement_sessions_dao::transition_session(db, user_id, movement_state, now)?;
 
-        // Aggiorna la tabella movement_sessions (sfruttando il tratto ToSql di MovementState)
-        {
-            let conn = db.lock().unwrap();
-            conn.execute(
-                "UPDATE movement_sessions SET ended_at = ?1 WHERE user_id = ?2 AND ended_at IS NULL",
-                rusqlite::params![now.to_rfc3339(), user_id],
-            )?;
-            conn.execute(
-                "INSERT INTO movement_sessions (user_id, state, started_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params![user_id, movement_state, now.to_rfc3339()],
-            )?;
-        }
-
-        // Pubblica il cambio di stato sul topic dell'utente.
-        // Grazie al macro #[serde(rename_all = "snake_case")] new_state diventerà "stopped" o "moving".
         let topic = format!("georuggine/server/{}/state", user_id);
         let payload = serde_json::to_string(&serde_json::json!({
             "user_id": user_id,
-            "state": new_state, 
-            "timestamp": now.to_rfc3339()
+            "state": new_state,
+            "timestamp": now.to_rfc3339()   //è output JSON, non storage quindi questa data va benissimo
         }))?;
-
         mqtt_client.publish(topic, QoS::AtLeastOnce, false, payload).await?;
     }
 
@@ -171,11 +140,7 @@ pub async fn send_direct(
 }
 
 /// Task periodico che controlla l'inattività dei veicoli e forza lo stato "Stopped" dopo 3 minuti
-pub async fn stale_state_watcher(
-    active: ActiveUsers,
-    db: SharedDb,
-    mqtt_client: AsyncClient,
-) {
+pub async fn stale_state_watcher(active: ActiveUsers, db: SharedDb, mqtt_client: AsyncClient) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
 
     loop {
@@ -186,29 +151,19 @@ pub async fn stale_state_watcher(
         {
             let mut users = active.write().unwrap();
             for (&user_id, session) in users.iter_mut() {
-                if session.state == UserState::Moving {
-                    if now.signed_duration_since(session.last_change_at).num_seconds() >= 180 {
-                        session.state = UserState::Stopped;
-                        session.last_change_at = now;
-                        stale_users.push(user_id);
-                    }
+                if session.state == UserState::Moving
+                    && now.signed_duration_since(session.last_change_at).num_seconds() >= STALE_AFTER_SECS
+                {
+                    session.state = UserState::Stopped;
+                    session.last_change_at = now;
+                    stale_users.push(user_id);
                 }
             }
         }
 
         for user_id in stale_users {
-            // Chiude la sessione attiva e ne apre una nuova di tipo "stopped"
-            {
-                if let Ok(conn) = db.lock() {
-                    let _ = conn.execute(
-                        "UPDATE movement_sessions SET ended_at = ?1 WHERE user_id = ?2 AND ended_at IS NULL",
-                        rusqlite::params![now.to_rfc3339(), user_id],
-                    );
-                    let _ = conn.execute(
-                        "INSERT INTO movement_sessions (user_id, state, started_at) VALUES (?1, ?2, ?3)",
-                        rusqlite::params![user_id, MovementState::Stopped, now.to_rfc3339()],
-                    );
-                }
+            if let Err(e) = movement_sessions_dao::transition_session(&db, user_id, MovementState::Stopped, now) {
+                tracing::error!("errore transizione stato per user {}: {:?}", user_id, e);
             }
 
             let topic = format!("georuggine/server/{}/state", user_id);

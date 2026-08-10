@@ -11,11 +11,11 @@ fn row_to_position(row: &Row) -> Result<Position> {
     })
 }
 
-pub fn insert_position(db: &SharedDb, user_id: i64, lat: f64, lon: f64) -> Result<i64> {
+pub fn insert_position(db: &SharedDb, user_id: i64, lat: f64, lon: f64, recorded_at: DateTime<Utc>) -> Result<i64> {
     let conn = db.lock().unwrap();
     conn.execute(
-        "INSERT INTO position_log (user_id, lat, lon) VALUES (?1, ?2, ?3)",
-        params![user_id, lat, lon],
+        "INSERT INTO position_log (user_id, lat, lon, recorded_at) VALUES (?1, ?2, ?3, ?4)",
+        params![user_id, lat, lon, recorded_at],
     )?;
     Ok(conn.last_insert_rowid())
 }

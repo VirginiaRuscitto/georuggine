@@ -95,6 +95,14 @@ impl FromSql for MovementState {
             .map_err(|_| FromSqlError::InvalidType)
     }
 }
+impl From<UserState> for MovementState {
+    fn from(s: UserState) -> Self {
+        match s {
+            UserState::Disconnected | UserState::Stopped => MovementState::Stopped,
+            UserState::Moving => MovementState::Moving,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MovementSession {

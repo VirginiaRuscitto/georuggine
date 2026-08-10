@@ -31,6 +31,15 @@ pub fn close_movement_session(db: &SharedDb, session_id: i64, ended_at: DateTime
     Ok(())
 }
 
+pub fn close_movement_session_for_user(db: &SharedDb, user_id: i64, ended_at: DateTime<Utc>) -> Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE movement_sessions SET ended_at = ?1 WHERE user_id = ?2 AND ended_at IS NULL",
+        params![ended_at, user_id],
+    )?;
+    Ok(())
+}
+
 pub fn get_open_movement_session(db: &SharedDb, user_id: i64) -> Result<Option<MovementSession>> {
     let conn = db.lock().unwrap();
     conn.query_row(
@@ -42,10 +51,9 @@ pub fn get_open_movement_session(db: &SharedDb, user_id: i64) -> Result<Option<M
     .optional()
 }
 
-pub fn transition_session(db: &SharedDb, user_id: i64, new_state: MovementState, at: DateTime<Utc>) -> Result<()> {
-    close_movement_session(db, user_id, at)?;
-    insert_movement_session(db, user_id, new_state, at)?;
-    Ok(())
+pub fn transition_session(db: &SharedDb, user_id: i64, new_state: MovementState, at: DateTime<Utc>) -> Result<i64> {
+    close_movement_session_for_user(db, user_id, at)?;
+    insert_movement_session(db, user_id, new_state, at)
 }
 
 pub fn get_sessions_in_range(db: &SharedDb, user_id: i64, from: DateTime<Utc>, to: DateTime<Utc>,) -> Result<Vec<MovementSession>> {
