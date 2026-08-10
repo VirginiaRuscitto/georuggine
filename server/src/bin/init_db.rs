@@ -48,6 +48,9 @@ fn main() -> rusqlite::Result<()> {
             CHECK (ended_at IS NULL OR ended_at >= started_at)
         );
 
+        --sender_id = NULL, recipient_id = NULL → broadcast dal server
+        --sender_id = X, recipient_id = NULL → messaggio dell'utente X al server
+        --sender_id = NULL, recipient_id = X → messaggio dal server all'utente X 
         CREATE TABLE messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sender_id INTEGER,

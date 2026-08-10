@@ -71,7 +71,7 @@ export default function MessagesPage() {
   const fetchAdminConversation = useCallback(async () => {
     if (!userId || !adminId) return;
     try {
-      const res = await api.get(`/api/messages/conversation?with=${adminId}&limit=50`);
+      const res = await api.get(`/api/messages?with=${adminId}&limit=50`);
       const apiMessages: ApiMessage[] = res.data || [];
 
       const serverMessages: Message[] = apiMessages.map((msg) => {

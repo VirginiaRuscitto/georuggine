@@ -1,11 +1,11 @@
 use crate::database::connection::SharedDb;
 use crate::models::{UserState, Position, MovementState};
 use crate::state::{ActiveUsers, UserSession};
-
 use chrono::{DateTime, Utc};
 use rumqttc::{AsyncClient, Event, EventLoop, Packet, QoS};
-
 use serde::Deserialize;
+use crate::dao::messages_dao;
+
 
 #[derive(Deserialize)]
 pub struct PositionUpdatePayload {
@@ -127,19 +127,13 @@ pub async fn handle_position_update(
     Ok(())
 }
 
-/// Salva nel DB un messaggio inviato da un utente al server
+/// Salva nel DB un messaggio inviato da un utente al server (sender = utente, recipient = NULL).
 pub async fn handle_user_message(
     user_id: i64,
     content: String,
     db: &SharedDb,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let now = Utc::now();
-    let conn = db.lock().unwrap();
-    // Inseriamo user_id come sender_id e NULL come recipient_id
-    conn.execute(
-        "INSERT INTO messages (sender_id, recipient_id, content, sent_at) VALUES (?1, NULL, ?2, ?3)",
-        rusqlite::params![user_id, content, now.to_rfc3339()],
-    )?;
+    messages_dao::insert_message(db, Some(user_id), None, &content)?;
     Ok(())
 }
 
