@@ -153,7 +153,8 @@ export default function MessagesPage() {
     if (!userId || !adminId) return;
     try {
       await api.post('/api/messages/direct', {
-        recipient_id: adminId,
+        sender_id: userId,
+        recipient_id: null,
         content,
       });
       await fetchAdminConversation();

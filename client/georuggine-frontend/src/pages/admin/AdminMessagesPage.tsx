@@ -67,7 +67,7 @@ export default function AdminMessagesPage() {
       const apiMessages: ApiMessage[] = res.data || [];
 
       const formatted: Message[] = apiMessages.map((msg) => {
-        const sender: 'me' | 'other' = msg.sender_id === userId ? 'me' : 'other';
+        const sender: 'me' | 'other' = msg.sender_id === null ? 'me' : 'other';
         return {
           id: msg.id,
           sender,
@@ -125,6 +125,7 @@ export default function AdminMessagesPage() {
     if (!selectedUserId || !userId) return;
     try {
       await api.post('/api/messages/direct', {
+        sender_id: null,
         recipient_id: selectedUserId,
         content,
       });
