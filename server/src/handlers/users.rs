@@ -15,7 +15,7 @@ use crate::{
     models::UserState,
     state::AppState,
 };
-
+use crate::auth::jwt_auth_middleware;
 
 #[derive(Serialize)]
 pub struct UserStatus {
@@ -53,5 +53,5 @@ pub async fn get_users_handler(State(state): State<AppState>) -> Response {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/users", get(get_users_handler))
-        .layer(middleware::from_fn(auth::jwt_admin_middleware))
+        .layer(middleware::from_fn(jwt_auth_middleware))
 }

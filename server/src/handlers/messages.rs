@@ -23,7 +23,8 @@ pub struct MessagesQuery {
 
 #[derive(Deserialize)]
 pub struct DirectMessageRequest {
-    pub recipient_id: i64,
+    pub sender_id: Option<i64>,
+    pub recipient_id: Option<i64>,
     pub content: String,
 }
 
@@ -91,8 +92,8 @@ pub async fn post_direct_message(
 
     let message_id = match messages_dao::insert_message(
         &state.db,
-        None,
-        Some(body.recipient_id),
+        body.sender_id,
+        body.recipient_id,
         &body.content,
     ) {
         Ok(id) => id,
@@ -107,7 +108,7 @@ pub async fn post_direct_message(
     };
 
     // Notifica via MQTT al destinatario
-    let topic = format!("georuggine/server/{}/direct", body.recipient_id);
+    let topic = format!("georuggine/server/{}/direct", body.recipient_id.unwrap_or(100));
     let payload = serde_json::json!({ "type": "direct", "id": message_id, "from": "server", "content": body.content });
     let delivered = publish(&state.mqtt_client, topic, payload).await;
 
