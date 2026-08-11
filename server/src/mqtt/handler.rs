@@ -6,7 +6,9 @@ use rumqttc::{AsyncClient, Event, EventLoop, Packet, QoS};
 use serde::Deserialize;
 use crate::dao::{messages_dao, movement_sessions_dao, position_log_dao};
 
-pub const STALE_AFTER_SECS: i64 = 180;
+pub const STALE_AFTER_SECS: i64 = 180; //movimento -> fermo senza cambi coordinate
+pub const COORD_EPSILON: f64 = 0.0001; //soglia per considerare due coordinate "diverse"
+pub const DISCONNECT_AFTER_SECS: i64 = 300; //fermo/movimento -> disconnesso senza posizioni ricevute
 
 #[derive(Deserialize)]
 pub struct PositionUpdatePayload {
@@ -28,14 +30,14 @@ pub fn check_state_transition(
 ) -> Option<UserState> {
     let coords_changed = match old_pos {
         Some(prev) => {
-            (prev.lat - new_pos.lat).abs() > 0.0001 || (prev.lon - new_pos.lon).abs() > 0.0001
+            (prev.lat - new_pos.lat).abs() > COORD_EPSILON || (prev.lon - new_pos.lon).abs() > COORD_EPSILON
         }
         None => false,
     };
 
     if coords_changed {
         Some(UserState::Moving)
-    } else if now.signed_duration_since(last_change_at).num_seconds() >= 180 {
+    } else if now.signed_duration_since(last_change_at).num_seconds() >= STALE_AFTER_SECS {
         Some(UserState::Stopped)
     } else {
         None
@@ -57,13 +59,19 @@ pub async fn handle_position_update(
     position_log_dao::insert_position(db, user_id, lat, lon, now)?;
 
     let mut transition_to: Option<UserState> = None;
+    let mut is_new_user = false;
     {
         let mut users = active.write().unwrap();
+        is_new_user = !users.contains_key(&user_id);
+
         let session = users.entry(user_id).or_insert_with(|| UserSession {
             last_position: None,
             last_change_at: now,
+            last_seen_at: now,
             state: UserState::Stopped,
         });
+
+        session.last_seen_at = now;
 
         if let Some(new_state) = check_state_transition(
             session.last_position.as_ref(),
@@ -80,6 +88,10 @@ pub async fn handle_position_update(
         session.last_position = Some(new_pos);
     }
 
+    if is_new_user {
+        movement_sessions_dao::insert_movement_session(db, user_id, MovementState::Stopped, now)?;
+    }
+
     if let Some(new_state) = transition_to {
         let movement_state = MovementState::from(new_state);
         movement_sessions_dao::transition_session(db, user_id, movement_state, now)?;
@@ -88,13 +100,14 @@ pub async fn handle_position_update(
         let payload = serde_json::to_string(&serde_json::json!({
             "user_id": user_id,
             "state": new_state,
-            "timestamp": now.to_rfc3339()   //è output JSON, non storage quindi questa data va benissimo
+            "timestamp": now.to_rfc3339()
         }))?;
         mqtt_client.publish(topic, QoS::AtLeastOnce, false, payload).await?;
     }
 
     Ok(())
 }
+
 
 /// Salva nel DB un messaggio inviato da un utente al server (sender = utente, recipient = NULL).
 pub async fn handle_user_message(
@@ -146,30 +159,44 @@ pub async fn stale_state_watcher(active: ActiveUsers, db: SharedDb, mqtt_client:
     loop {
         interval.tick().await;
         let now = Utc::now();
-        let mut stale_users = Vec::new();
+        let mut transitions: Vec<(i64, UserState)> = Vec::new();
 
         {
             let mut users = active.write().unwrap();
             for (&user_id, session) in users.iter_mut() {
-                if session.state == UserState::Moving
+                if session.state != UserState::Disconnected
+                    && now.signed_duration_since(session.last_seen_at).num_seconds() >= DISCONNECT_AFTER_SECS
+                {
+                    session.state = UserState::Disconnected;
+                    session.last_change_at = now;
+                    transitions.push((user_id, UserState::Disconnected));
+                } else if session.state == UserState::Moving
                     && now.signed_duration_since(session.last_change_at).num_seconds() >= STALE_AFTER_SECS
                 {
                     session.state = UserState::Stopped;
                     session.last_change_at = now;
-                    stale_users.push(user_id);
+                    transitions.push((user_id, UserState::Stopped));
                 }
             }
         }
 
-        for user_id in stale_users {
-            if let Err(e) = movement_sessions_dao::transition_session(&db, user_id, MovementState::Stopped, now) {
+        for (user_id, new_state) in transitions {
+            // Disconnected non è un valore ammesso in movement_sessions (solo stopped/moving):
+            // in quel caso chiudiamo la sessione aperta senza aprirne una nuova.
+            let result = if new_state == UserState::Disconnected {
+                movement_sessions_dao::close_movement_session_for_user(&db, user_id, now)
+            } else {
+                movement_sessions_dao::transition_session(&db, user_id, MovementState::from(new_state), now).map(|_| ())
+            };
+
+            if let Err(e) = result {
                 tracing::error!("errore transizione stato per user {}: {:?}", user_id, e);
             }
 
             let topic = format!("georuggine/server/{}/state", user_id);
             if let Ok(payload) = serde_json::to_string(&serde_json::json!({
                 "user_id": user_id,
-                "state": UserState::Stopped,
+                "state": new_state,
                 "timestamp": now.to_rfc3339()
             })) {
                 let _ = mqtt_client.publish(topic, QoS::AtLeastOnce, false, payload).await;

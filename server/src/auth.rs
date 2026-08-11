@@ -173,15 +173,6 @@ fn create_user(db: &SharedDb, body: RegisterRequest, allow_admin: bool) -> Resul
         ));
     }
 
-    match users_dao::email_exists(db, &body.email) {
-        Ok(true) => return Err(error_response(StatusCode::CONFLICT, "Questa email è già registrata")),
-        Ok(false) => {}
-        Err(e) => {
-            tracing::error!("errore db in register: {e}");
-            return Err(error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare la registrazione. Riprova più tardi"));
-        }
-    }
-
     let password_hash = match hash_password(&body.password) {
         Ok(h) => h,
         Err(e) => {
@@ -199,10 +190,26 @@ fn create_user(db: &SharedDb, body: RegisterRequest, allow_admin: bool) -> Resul
         is_admin,
     };
 
-    let user_id = users_dao::insert_user(db, &new_user).map_err(|e| {
-        tracing::error!("errore inserimento utente: {e}");
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile completare la registrazione. Riprova più tardi")
-    })?;
+    let user_id = match users_dao::insert_user(db, &new_user) {
+        Ok(id) => id,
+
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            return Err(error_response(
+                StatusCode::CONFLICT,
+                "Questa email è già registrata",
+            ));
+        }
+
+        Err(e) => {
+            tracing::error!("errore inserimento utente: {e}");
+            return Err(error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile completare la registrazione. Riprova più tardi",
+            ));
+        }
+    };
 
     Ok(User {
         id: user_id,
@@ -251,12 +258,15 @@ async fn me_handler(
     }
 }
 
-async fn delete_user_handler(State(db): State<SharedDb>, Extension(claims): Extension<Claims>, Path(user_id): Path<i64>) -> Response {
+async fn delete_user_handler(State(state): State<AppState>, Extension(claims): Extension<Claims>, Path(user_id): Path<i64>) -> Response {
     if claims.sub == user_id {
         return error_response(StatusCode::BAD_REQUEST, "Non puoi eliminare il tuo stesso account");
     }
-    match users_dao::delete_user(&db, user_id) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+    match users_dao::delete_user(&state.db, user_id) {
+        Ok(true) => {
+            state.active_users.write().unwrap().remove(&user_id);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
         Err(e) => {
             tracing::error!("errore eliminazione utente: {e}");

@@ -7,11 +7,14 @@ use crate::models::{Position, UserState};
 
 pub struct UserSession {
     pub last_position: Option<Position>,
-    pub last_change_at: DateTime<Utc>,
+    pub last_change_at: DateTime<Utc>, //si aggiorna quando cambia lo stato
+    pub last_seen_at: DateTime<Utc>, //aggiornato ad ogni posizione ricevuta
     pub state: UserState,
 }
 
 pub type ActiveUsers = Arc<RwLock<HashMap<i64, UserSession>>>;
+
+
 
 #[derive(Clone)]
 pub struct AppState {
