@@ -32,8 +32,12 @@ pub async fn cpu_logging_task() {
         match sys.process(pid) {
             Some(process) => {
                 let cpu_usage = process.cpu_usage();
+                let run_time_secs = process.run_time();
+                let memory_kb = process.memory();
                 let now = chrono::Utc::now().to_rfc3339();
-                let line = format!("{now} cpu_usage={cpu_usage:.2}%\n");
+                let line = format!(
+                    "{now} cpu_usage={cpu_usage:.2}% run_time={run_time_secs}s memory={memory_kb}KB\n"
+                );
 
                 if let Err(e) = append_log_line(&line) {
                     tracing::warn!("errore scrittura log CPU: {e}");

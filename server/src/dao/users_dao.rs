@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use crate::database::connection::SharedDb;
 use crate::models::{NewUser, User};
 use rusqlite::{params, params_from_iter, OptionalExtension, Result, Row, ToSql};
@@ -50,16 +49,6 @@ pub fn get_user_by_id(db: &SharedDb, user_id: i64) -> Result<Option<User>> {
         row_to_user,
     )
     .optional()
-}
-
-pub fn email_exists(db: &SharedDb, email: &str) -> Result<bool> {
-    let conn = db.lock().unwrap();
-    let count: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM users WHERE email = ?1",
-        params![email],
-        |row| row.get(0),
-    )?;
-    Ok(count > 0)
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

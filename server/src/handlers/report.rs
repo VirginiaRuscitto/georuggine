@@ -11,8 +11,7 @@ use chrono::{DateTime, Datelike, Days, NaiveDate, Utc};
 use serde::Deserialize;
 use crate::{
     auth,
-    dao::{movement_sessions_dao, position_log_dao},
-    database::connection::SharedDb,
+    dao::{movement_sessions_dao, position_log_dao, users_dao},
     errors::error_response,
     models::{MovementSession, MovementState, Position, ReportPeriod, RouteReport},
     state::AppState,
@@ -24,10 +23,19 @@ pub struct ReportQuery {
     pub period: ReportPeriod 
 }
 
-pub async fn get_report_handler(State(db): State<SharedDb>, Query(params): Query<ReportQuery>) -> Response {
+pub async fn get_report_handler(State(state): State<AppState>, Query(params): Query<ReportQuery>) -> Response {
     let (start, end) = get_start_end_from_report_period(params.period);
 
-    let positions = match position_log_dao::get_positions_in_range(&db, params.user_id, start, end) {
+    let user_exists = match users_dao::get_user_by_id(&state.db, params.user_id) {
+        Ok(Some(_)) => true,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
+        Err(e) => {
+            tracing::error!("errore get_user_by_id: {e}");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore del server");
+        }
+    };
+
+    let positions = match position_log_dao::get_positions_in_range(&state.db, params.user_id, start, end) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("errore get_positions_in_range: {e}");
@@ -35,7 +43,7 @@ pub async fn get_report_handler(State(db): State<SharedDb>, Query(params): Query
         }
     };
 
-    let sessions = match movement_sessions_dao::get_sessions_in_range(&db, params.user_id, start, end) {
+    let sessions = match movement_sessions_dao::get_sessions_in_range(&state.db, params.user_id, start, end) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("errore get_sessions_in_range: {e}");
@@ -44,7 +52,7 @@ pub async fn get_report_handler(State(db): State<SharedDb>, Query(params): Query
     };
 
     let avg_speed_kmh = compute_avg_speed_kmh(&positions);
-    let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, end);
+    let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, start, end);
 
     let report = RouteReport {
         user_id: params.user_id,
@@ -132,20 +140,22 @@ pub fn compute_avg_speed_kmh(positions: &[Position]) -> f64 {
     total_distance_km / total_hours
 }
 
-pub fn compute_durations(sessions: &[MovementSession], default_end: DateTime<Utc>) -> (i64, i64) {
-    sessions
-        .iter()
-        .fold((0, 0), |(mut move_acc, mut pause_acc), session| {
-            let end = session.ended_at.unwrap_or(default_end);
-            let duration = (end - session.started_at).num_seconds();
+pub fn compute_durations(
+    sessions: &[MovementSession],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> (i64, i64) {
+    sessions.iter().fold((0, 0), |(mut move_acc, mut pause_acc), session| {
+        let session_start = session.started_at.max(start);
+        let session_end = session.ended_at.unwrap_or(end).min(end);
+        let duration = (session_end - session_start).num_seconds().max(0);
 
-            match session.state {
-                MovementState::Moving => move_acc += duration,
-                MovementState::Stopped => pause_acc += duration,
-            }
-
-            (move_acc, pause_acc)
-        })
+        match session.state {
+            MovementState::Moving => move_acc += duration,
+            MovementState::Stopped => pause_acc += duration,
+        }
+        (move_acc, pause_acc)
+    })
 }
 
 pub fn router() -> Router<AppState> {

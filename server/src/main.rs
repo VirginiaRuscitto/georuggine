@@ -15,9 +15,23 @@ use axum::Router;
 use rumqttc::{AsyncClient, MqttOptions};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use futures::FutureExt;
 
 use database::connection::SharedDb;
 use state::{ActiveUsers, AppState};
+
+fn spawn_supervised<F>(name: &'static str, fut: F)
+where F: std::future::Future<Output = ()> + Send + 'static{
+    tokio::spawn(async move {
+        //AssertUnwindSafe perché i task non condividono stato mutabile instabile col resto
+        let result = std::panic::AssertUnwindSafe(fut).catch_unwind().await;
+        if let Err(e) = result {
+            tracing::error!("task '{name}' terminato per panic: {e:?}");
+        } else {
+            tracing::warn!("task '{name}' terminato inaspettatamente (senza panic)");
+        }
+    });
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -65,14 +79,13 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Server HTTP in ascolto su 0.0.0.0:3001");
 
     // --- Task di background ---
-    tokio::spawn(logging::cpu_logging_task());
-    tokio::spawn(mqtt::handler::start_mqtt_listener(
-        eventloop,
-        db.clone(),
-        active_users.clone(),
-        mqtt_client.clone(),
+    spawn_supervised("cpu_logging", logging::cpu_logging_task());
+    spawn_supervised("mqtt_listener", mqtt::handler::start_mqtt_listener(
+        eventloop, db.clone(), active_users.clone(), mqtt_client.clone(),
     ));
-    tokio::spawn(mqtt::handler::stale_state_watcher(active_users, db, mqtt_client));
+    spawn_supervised("stale_state_watcher", mqtt::handler::stale_state_watcher(
+        active_users, db, mqtt_client,
+    ));
     
     axum::serve(listener, app).await?;
     Ok(())

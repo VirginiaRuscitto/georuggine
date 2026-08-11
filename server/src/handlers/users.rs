@@ -10,7 +10,6 @@ use axum::{
 use axum::extract::Query;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sysinfo::Users;
 use crate::{
     auth,
     dao::users_dao,
