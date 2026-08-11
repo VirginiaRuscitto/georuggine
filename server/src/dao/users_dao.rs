@@ -1,6 +1,8 @@
+use std::cmp::Ordering;
 use crate::database::connection::SharedDb;
 use crate::models::{NewUser, User};
-use rusqlite::{params, OptionalExtension, Result, Row};
+use rusqlite::{params, params_from_iter, OptionalExtension, Result, Row, ToSql};
+use serde::Deserialize;
 
 fn row_to_user(row: &Row) -> Result<User> {
     Ok(User {
@@ -60,13 +62,94 @@ pub fn email_exists(db: &SharedDb, email: &str) -> Result<bool> {
     Ok(count > 0)
 }
 
-pub fn get_all_users(db: &SharedDb) -> Result<Vec<User>> {
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+enum Direction{
+    ASC,
+    DESC,
+}
+
+impl Direction{
+    fn to_sql(&self) -> &str{
+        match self {
+            Direction::ASC => "ASC",
+            Direction::DESC => "DESC"
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderBy{
+    NAME(Direction),
+    SURNAME(Direction),
+    CREATED_AT(Direction)
+}
+
+impl OrderBy{
+    // valutare l'uso della libreria strum per convertire enum in stringhe (simil serde ma per sql)
+    fn to_sql(&self) -> String{
+        match self{
+            OrderBy::NAME(dir) => format!(" ORDER BY {} {}", "name", dir.to_sql()),
+            OrderBy::SURNAME(dir) => format!(" ORDER BY {} {}", "surname", dir.to_sql()),
+            OrderBy::CREATED_AT(dir) => format!(" ORDER BY {} {}", "created_at", dir.to_sql())
+        }
+    }
+}
+
+pub fn get_all_users(
+    db: &SharedDb,
+    search: Option<String>,
+    order_by: Option<OrderBy>,
+    is_admin: Option<bool>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Vec<User>> {
+    let mut query = String::from("SELECT id, name, surname, email, created_at, is_admin FROM users");
+
+    let mut conditions = Vec::new();
+    let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+    // 1. Search Filter
+    if let Some(s) = search {
+        if !s.trim().is_empty() {
+            conditions.push("(name LIKE ? OR surname LIKE ? OR email LIKE ?)");
+            let pattern = format!("%{}%", s.trim());
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern));
+        }
+    }
+
+    // 2. Is Admin Filter
+    if let Some(admin) = is_admin {
+        conditions.push("is_admin = ?");
+        params.push(Box::new(admin));
+    }
+
+    if !conditions.is_empty() {
+        query.push_str(" WHERE ");
+        query.push_str(&conditions.join(" AND "));
+    }
+
+    // 3. Enum-based ORDER BY Clause
+    let order_clause = order_by.unwrap_or(OrderBy::NAME(Direction::ASC)).to_sql();
+    query.push_str(&order_clause);
+
+    // 4. LIMIT e OFFSET Diretti
+    // limit predefinito: 10 (con un cap di sicurezza a 100 per evitare che il client scarichi tutto il DB)
+    let limit_val = limit.unwrap_or(10).min(100);
+    // offset predefinito: 0
+    let offset_val = offset.unwrap_or(0);
+
+    query.push_str(" LIMIT ? OFFSET ?");
+    params.push(Box::new(limit_val));
+    params.push(Box::new(offset_val));
+
+
     let conn = db.lock().unwrap();
-    let mut stmt = conn.prepare(
-        "SELECT id, name, surname, email, created_at, is_admin
-         FROM users ORDER BY id",
-    )?;
-    let rows = stmt.query_map([], row_to_user)?;
+    let mut stmt = conn.prepare(&query)?;
+    let rows = stmt.query_map(params_from_iter(params.iter()), row_to_user)?;
     rows.collect()
 }
 

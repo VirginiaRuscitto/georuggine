@@ -72,7 +72,18 @@ export default function AdminUsersPage() {
 
   const fetchUsers = async () => {
     try {
-      const res = await api.get('/api/users');
+      const res = await api.get('/api/users', {
+        params: {
+          order_by: { "Name": 'asc' }, 
+          search: search || undefined,
+          is_admin: adminFilter !== 'all' ? adminFilter === 'admin' : undefined,
+          state: stateFilter !== 'all' ? stateFilter : undefined,
+          // numero di utenti da recuperare, se null ne recupera 100
+          limit: null,
+          // offset per la paginazione, se null parte dall'inizio
+          offset: null,
+        },
+      });
       setUsers(res.data || []);
     } catch (e) {
       console.error('Errore fetch users:', e);

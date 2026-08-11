@@ -7,28 +7,53 @@ use axum::{
     Json,
     Router,
 };
-use serde::Serialize;
+use axum::extract::Query;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sysinfo::Users;
 use crate::{
     auth,
     dao::users_dao,
+    dao::users_dao::OrderBy,
     errors::error_response,
     models::UserState,
     state::AppState,
+    auth::jwt_auth_middleware,
+    handlers::report::ReportQuery,
+    models::ReportPeriod,
 };
-use crate::auth::jwt_auth_middleware;
 
 #[derive(Serialize)]
 pub struct UserStatus {
-    pub id: i64,
-    pub username: String,
+    pub name: String,
+    pub surname: String,
+    pub email: String,
+    pub created_at: DateTime<Utc>,
     pub state: UserState, // "Disconnected" | "Stopped" | "Moving"
     pub is_admin: bool,
 }
 
+#[derive(Deserialize)]
+pub struct UsersQuery {
+    pub order_by: Option<OrderBy>,
+    pub search: Option<String>,
+    pub is_admin: Option<bool>,
+    pub state: Option<UserState>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>
+}
+
 /// GET /api/users
 /// Ritorna la lista completa degli utenti registrati.
-pub async fn get_users_handler(State(state): State<AppState>) -> Response {
-    let users = match users_dao::get_all_users(&state.db) {
+pub async fn get_users_handler(State(state): State<AppState>, Query(params): Query<UsersQuery>) -> Response {
+    let users = match users_dao::get_all_users(
+        &state.db,
+        params.search,
+        params.order_by,
+        params.is_admin,
+        params.limit,
+        params.offset
+    ) {
         Ok(u) => u,
         Err(e) => {
             tracing::error!("errore get_all_users: {e}");
@@ -38,11 +63,31 @@ pub async fn get_users_handler(State(state): State<AppState>) -> Response {
 
     let active = state.active_users.read().unwrap();
 
+    if params.state.is_some(){
+        let result: Vec<UserStatus> = users
+            .into_iter()
+            .filter(|u| active.get(&u.id).unwrap().state == params.state.unwrap())
+            .map(|u| UserStatus {
+                name: u.name,
+                surname: u.surname,
+                email: u.email,
+                created_at: u.created_at,
+                state: active.get(&u.id).unwrap().state,
+                is_admin: u.is_admin,
+            })
+            .collect();
+
+        return Json(result).into_response()
+    }
+
+    //else
     let result: Vec<UserStatus> = users
         .into_iter()
         .map(|u| UserStatus {
-            id: u.id,
-            username: u.name,
+            name: u.name,
+            surname: u.surname,
+            email: u.email,
+            created_at: u.created_at,
             state: active.get(&u.id).map(|s| s.state).unwrap_or(UserState::Disconnected),
             is_admin: u.is_admin,
         })
