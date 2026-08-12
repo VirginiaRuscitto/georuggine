@@ -53,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let cors = CorsLayer::new()
-    .allow_origin(Any)
+    .allow_origin(Any) //TODO togliere any e mettere le robe giuste da accettare
     .allow_methods([
         Method::GET,
         Method::POST,
