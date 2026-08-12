@@ -5,3 +5,5 @@ client/node_modules/
 
 .vscode/
 .idea/
+server/src/database/georuggine.db
+server/src/database/georuggine.db

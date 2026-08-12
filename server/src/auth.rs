@@ -70,7 +70,7 @@ fn generate_jwt(user_id: i64, is_admin: bool) -> Result<String, jsonwebtoken::er
     encode(&Header::default(), &claims, &EncodingKey::from_secret(jwt_secret()))
 }
 
-fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+pub(crate) fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(jwt_secret()),

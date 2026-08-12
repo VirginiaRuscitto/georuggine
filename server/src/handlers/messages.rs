@@ -10,10 +10,13 @@ use rumqttc::{AsyncClient, QoS};
 use serde::{Deserialize, Serialize};
 use crate::{
     auth::{self, Claims},
-    dao::messages_dao,
+    dao::{messages_dao, users_dao},
     errors::error_response,
     state::AppState,
 };
+
+const DEFAULT_LIMIT: i64 = 50;
+const MAX_LIMIT: i64 = 200;
 
 #[derive(Deserialize)]
 pub struct MessagesQuery {
@@ -23,8 +26,7 @@ pub struct MessagesQuery {
 
 #[derive(Deserialize)]
 pub struct DirectMessageRequest {
-    pub sender_id: Option<i64>,
-    pub recipient_id: Option<i64>,
+    pub recipient_id: i64,
     pub content: String,
 }
 
@@ -36,9 +38,8 @@ pub struct BroadcastRequest {
 #[derive(Serialize)]
 struct SendResult {
     id: i64,
-    delivered: bool,
+    queued: bool,
 }
-
 
 async fn publish(mqtt_client: &AsyncClient, topic: impl Into<String>, payload: serde_json::Value) -> bool {
     match mqtt_client.publish(topic.into(), QoS::AtLeastOnce, false, payload.to_string()).await {
@@ -50,21 +51,20 @@ async fn publish(mqtt_client: &AsyncClient, topic: impl Into<String>, payload: s
     }
 }
 
-/// GET /api/messages?with=<user_id>&limit=
-/// Utente normale: vede sempre la propria conversazione (con=se stesso), `with` è ignorato
-/// Admin: con `with=X` vede la conversazione con l'utente X, senza `with` vede lo storico broadcast
 pub async fn get_messages_handler(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Query(params): Query<MessagesQuery>,
 ) -> impl IntoResponse {
-    let limit = params.limit.unwrap_or(50);
+    let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
-    let target_user = if claims.is_admin { params.with } else { Some(claims.sub) };
-
-    let result = match target_user {
-        Some(user_id) => messages_dao::get_conversation(&state.db, user_id, limit),
-        None => messages_dao::get_broadcast_messages(&state.db, limit),
+    let result = if claims.is_admin {
+        match params.with {
+            Some(user_id) => messages_dao::get_direct_conversation(&state.db, user_id, limit),
+            None => messages_dao::get_broadcast_messages(&state.db, limit),
+        }
+    } else {
+        messages_dao::get_conversation_with_broadcasts(&state.db, claims.sub, limit)
     };
 
     match result {
@@ -76,82 +76,60 @@ pub async fn get_messages_handler(
     }
 }
 
-//POST /api/messages/direct messaggio diretto, salvato e notificato via MQTT
 pub async fn post_direct_message(
     State(state): State<AppState>,
     Json(body): Json<DirectMessageRequest>,
 ) -> impl IntoResponse {
-    if body.content.trim().is_empty() {
-        tracing::error!("tentativo di inviare un messaggio vuoto");
+    let content = match messages_dao::validate_content(&body.content) {
+        Ok(c) => c,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, msg),
+    };
 
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "Il contenuto del messaggio non può essere vuoto",
-        );
+    match users_dao::get_user_by_id(&state.db, body.recipient_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Destinatario non trovato"),
+        Err(e) => {
+            tracing::error!("errore verifica destinatario: {e}");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile inviare il messaggio");
+        }
     }
 
-    let message_id = match messages_dao::insert_message(
-        &state.db,
-        body.sender_id,
-        body.recipient_id,
-        &body.content,
-    ) {
+    let message_id = match messages_dao::insert_message(&state.db, None, Some(body.recipient_id), content) {
         Ok(id) => id,
         Err(e) => {
             tracing::error!("errore insert_message (direct): {e}");
-
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Impossibile salvare il messaggio",
-            );
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile salvare il messaggio");
         }
     };
 
-    // Notifica via MQTT al destinatario
-    let topic = format!("georuggine/server/{}/direct", body.recipient_id.unwrap_or(100));
-    let payload = serde_json::json!({ "type": "direct", "id": message_id, "from": "server", "content": body.content });
-    let delivered = publish(&state.mqtt_client, topic, payload).await;
+    let topic = format!("georuggine/server/{}/direct", body.recipient_id);
+    let payload = serde_json::json!({ "type": "direct", "id": message_id, "from": "server", "content": content });
+    let queued = publish(&state.mqtt_client, topic, payload).await;
 
-    Json(SendResult { id: message_id, delivered }).into_response()
+    Json(SendResult { id: message_id, queued }).into_response()
 }
 
-/// POST /api/broadcast
-/// body: { "content": "testo" }
-/// Salva nel DB e pubblica su MQTT per tutti i veicoli.
 pub async fn post_broadcast_handler(
     State(state): State<AppState>,
     Json(body): Json<BroadcastRequest>,
 ) -> impl IntoResponse {
-    if body.content.trim().is_empty() {
-        tracing::error!("tentativo di inviare un broadcast vuoto");
+    let content = match messages_dao::validate_content(&body.content) {
+        Ok(c) => c,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, msg),
+    };
 
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "Il contenuto del messaggio non può essere vuoto",
-        );
-    }
-
-    let message_id = match messages_dao::insert_message(
-        &state.db,
-        None,
-        None,
-        &body.content,
-    ) {
+    let message_id = match messages_dao::insert_message(&state.db, None, None, content) {
         Ok(id) => id,
         Err(e) => {
             tracing::error!("errore insert_message (broadcast): {e}");
-
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Impossibile salvare il messaggio",
-            );
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile salvare il messaggio");
         }
     };
 
-    let payload = serde_json::json!({ "type": "broadcast", "id": message_id, "content": body.content });
-    let delivered = publish(&state.mqtt_client, "georuggine/server/broadcast", payload).await;
+    let payload = serde_json::json!({ "type": "broadcast", "id": message_id, "content": content });
+    let queued = publish(&state.mqtt_client, "georuggine/server/broadcast", payload).await;
 
-    Json(SendResult { id: message_id, delivered }).into_response()
+    Json(SendResult { id: message_id, queued }).into_response()
 }
 
 pub fn router() -> Router<AppState> {
@@ -163,12 +141,12 @@ pub fn router() -> Router<AppState> {
 fn user_router() -> Router<AppState> {
     Router::new()
         .route("/api/messages", get(get_messages_handler))
-        .route("/api/messages/direct", post(post_direct_message))
         .layer(middleware::from_fn(auth::jwt_auth_middleware))
 }
 
 fn admin_router() -> Router<AppState> {
     Router::new()
+        .route("/api/messages/direct", post(post_direct_message))
         .route("/api/broadcast", post(post_broadcast_handler))
         .layer(middleware::from_fn(auth::jwt_admin_middleware))
 }

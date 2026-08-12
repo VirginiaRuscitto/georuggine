@@ -24,11 +24,12 @@ use crate::{
 
 #[derive(Serialize)]
 pub struct UserStatus {
+    pub id: i64,
     pub name: String,
     pub surname: String,
     pub email: String,
     pub created_at: DateTime<Utc>,
-    pub state: UserState, // "Disconnected" | "Stopped" | "Moving"
+    pub state: UserState,
     pub is_admin: bool,
 }
 
@@ -67,6 +68,7 @@ pub async fn get_users_handler(State(state): State<AppState>, Query(params): Que
             .into_iter()
             .filter(|u| active.get(&u.id).unwrap().state == params.state.unwrap())
             .map(|u| UserStatus {
+                id: u.id,
                 name: u.name,
                 surname: u.surname,
                 email: u.email,
@@ -83,6 +85,7 @@ pub async fn get_users_handler(State(state): State<AppState>, Query(params): Que
     let result: Vec<UserStatus> = users
         .into_iter()
         .map(|u| UserStatus {
+            id: u.id,                        // <-- aggiunto
             name: u.name,
             surname: u.surname,
             email: u.email,

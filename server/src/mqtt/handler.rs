@@ -1,3 +1,4 @@
+use crate::auth;
 use crate::database::connection::SharedDb;
 use crate::models::{UserState, Position, MovementState};
 use crate::state::{ActiveUsers, UserSession};
@@ -6,9 +7,9 @@ use rumqttc::{AsyncClient, Event, EventLoop, Packet, QoS};
 use serde::Deserialize;
 use crate::dao::{messages_dao, movement_sessions_dao, position_log_dao};
 
-pub const STALE_AFTER_SECS: i64 = 180; //movimento -> fermo senza cambi coordinate
-pub const COORD_EPSILON: f64 = 0.0001; //soglia per considerare due coordinate "diverse"
-pub const DISCONNECT_AFTER_SECS: i64 = 300; //fermo/movimento -> disconnesso senza posizioni ricevute
+pub const STALE_AFTER_SECS: i64 = 180;
+// intervallo minimo tra due messaggi accettati dallo stesso utente via MQTT
+const MIN_MESSAGE_INTERVAL_SECS: i64 = 1;
 
 #[derive(Deserialize)]
 pub struct PositionUpdatePayload {
@@ -18,6 +19,9 @@ pub struct PositionUpdatePayload {
 
 #[derive(Deserialize)]
 pub struct UserMessagePayload {
+    // il client deve autenticarsi anche su MQTT: senza questo campo chiunque potrebbe
+    // pubblicare sul topic di un altro utente e impersonarlo (vedi 1.1 del report)
+    pub token: String,
     pub content: String,
 }
 
@@ -30,14 +34,14 @@ pub fn check_state_transition(
 ) -> Option<UserState> {
     let coords_changed = match old_pos {
         Some(prev) => {
-            (prev.lat - new_pos.lat).abs() > COORD_EPSILON || (prev.lon - new_pos.lon).abs() > COORD_EPSILON
+            (prev.lat - new_pos.lat).abs() > 0.0001 || (prev.lon - new_pos.lon).abs() > 0.0001
         }
         None => false,
     };
 
     if coords_changed {
         Some(UserState::Moving)
-    } else if now.signed_duration_since(last_change_at).num_seconds() >= STALE_AFTER_SECS {
+    } else if now.signed_duration_since(last_change_at).num_seconds() >= 180 {
         Some(UserState::Stopped)
     } else {
         None
@@ -59,18 +63,17 @@ pub async fn handle_position_update(
     position_log_dao::insert_position(db, user_id, lat, lon, now)?;
 
     let mut transition_to: Option<UserState> = None;
-    let mut is_new_user = false;
     {
         let mut users = active.write().unwrap();
-        is_new_user = !users.contains_key(&user_id);
-
         let session = users.entry(user_id).or_insert_with(|| UserSession {
             last_position: None,
             last_change_at: now,
             last_seen_at: now,
+            last_message_at: None,
             state: UserState::Stopped,
         });
 
+        // ogni posizione ricevuta conta come "visto ora", a prescindere dal cambio di stato
         session.last_seen_at = now;
 
         if let Some(new_state) = check_state_transition(
@@ -86,10 +89,6 @@ pub async fn handle_position_update(
             }
         }
         session.last_position = Some(new_pos);
-    }
-
-    if is_new_user {
-        movement_sessions_dao::insert_movement_session(db, user_id, MovementState::Stopped, now)?;
     }
 
     if let Some(new_state) = transition_to {
@@ -108,14 +107,64 @@ pub async fn handle_position_update(
     Ok(())
 }
 
-
 /// Salva nel DB un messaggio inviato da un utente al server (sender = utente, recipient = NULL).
+/// Il JWT nel payload deve appartenere allo stesso user_id del topic: se non corrisponde o non è
+/// valido, il messaggio viene scartato con un warning invece di essere salvato a nome di qualcun altro.
+/// Applica inoltre un rate limit (1 messaggio/secondo per utente) per evitare che un client in
+/// loop o malevolo riempia la tabella messages senza controllo.
 pub async fn handle_user_message(
     user_id: i64,
-    content: String,
+    payload: UserMessagePayload,
     db: &SharedDb,
+    active: &ActiveUsers,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    messages_dao::insert_message(db, Some(user_id), None, &content)?;
+    let claims = match auth::verify_jwt(&payload.token) {
+        Ok(c) => c,
+        Err(_) => {
+            tracing::warn!("MQTT message rifiutato: token non valido per user {user_id}");
+            return Ok(());
+        }
+    };
+    if claims.sub != user_id {
+        tracing::warn!(
+            "MQTT message rifiutato: token di user {} usato sul topic di user {}",
+            claims.sub, user_id
+        );
+        return Ok(());
+    }
+
+    let content = match messages_dao::validate_content(&payload.content) {
+        Ok(c) => c,
+        Err(msg) => {
+            tracing::warn!("messaggio MQTT scartato da user {user_id}: {msg}");
+            return Ok(());
+        }
+    };
+
+    let now = Utc::now();
+    {
+        let mut users = active.write().unwrap();
+        let session = users.entry(user_id).or_insert_with(|| UserSession {
+            last_position: None,
+            last_change_at: now,
+            last_seen_at: now,
+            last_message_at: None,
+            state: UserState::Stopped,
+        });
+
+        if let Some(last) = session.last_message_at {
+            if now.signed_duration_since(last).num_seconds() < MIN_MESSAGE_INTERVAL_SECS {
+                tracing::warn!("messaggio MQTT scartato da user {user_id}: rate limit superato");
+                return Ok(());
+            }
+        }
+        session.last_message_at = Some(now);
+    }
+
+    if let Err(e) = messages_dao::insert_message(db, Some(user_id), None, content) {
+        tracing::error!("errore salvataggio messaggio da user {user_id}: {e}");
+    }
+
     Ok(())
 }
 
@@ -159,44 +208,30 @@ pub async fn stale_state_watcher(active: ActiveUsers, db: SharedDb, mqtt_client:
     loop {
         interval.tick().await;
         let now = Utc::now();
-        let mut transitions: Vec<(i64, UserState)> = Vec::new();
+        let mut stale_users = Vec::new();
 
         {
             let mut users = active.write().unwrap();
             for (&user_id, session) in users.iter_mut() {
-                if session.state != UserState::Disconnected
-                    && now.signed_duration_since(session.last_seen_at).num_seconds() >= DISCONNECT_AFTER_SECS
-                {
-                    session.state = UserState::Disconnected;
-                    session.last_change_at = now;
-                    transitions.push((user_id, UserState::Disconnected));
-                } else if session.state == UserState::Moving
+                if session.state == UserState::Moving
                     && now.signed_duration_since(session.last_change_at).num_seconds() >= STALE_AFTER_SECS
                 {
                     session.state = UserState::Stopped;
                     session.last_change_at = now;
-                    transitions.push((user_id, UserState::Stopped));
+                    stale_users.push(user_id);
                 }
             }
         }
 
-        for (user_id, new_state) in transitions {
-            // Disconnected non è un valore ammesso in movement_sessions (solo stopped/moving):
-            // in quel caso chiudiamo la sessione aperta senza aprirne una nuova.
-            let result = if new_state == UserState::Disconnected {
-                movement_sessions_dao::close_movement_session_for_user(&db, user_id, now)
-            } else {
-                movement_sessions_dao::transition_session(&db, user_id, MovementState::from(new_state), now).map(|_| ())
-            };
-
-            if let Err(e) = result {
+        for user_id in stale_users {
+            if let Err(e) = movement_sessions_dao::transition_session(&db, user_id, MovementState::Stopped, now) {
                 tracing::error!("errore transizione stato per user {}: {:?}", user_id, e);
             }
 
             let topic = format!("georuggine/server/{}/state", user_id);
             if let Ok(payload) = serde_json::to_string(&serde_json::json!({
                 "user_id": user_id,
-                "state": new_state,
+                "state": UserState::Stopped,
                 "timestamp": now.to_rfc3339()
             })) {
                 let _ = mqtt_client.publish(topic, QoS::AtLeastOnce, false, payload).await;
@@ -221,29 +256,32 @@ pub async fn start_mqtt_listener(
                 let topic = publish.topic;
                 let parts: Vec<&str> = topic.split('/').collect();
 
-                if parts.len() == 4 && parts[0] == "georuggine" && parts[1] == "client" {
-                    if let Ok(user_id) = parts[2].parse::<i64>() {
-                        match parts[3] {
-                            "position" => {
-                                if let Ok(payload) = serde_json::from_slice::<PositionUpdatePayload>(&publish.payload) {
-                                    let _ = handle_position_update(
-                                        user_id,
-                                        payload.lat,
-                                        payload.lon,
-                                        &db,
-                                        &active,
-                                        &mqtt_client,
-                                    ).await;
-                                }
-                            }
-                            "message" => {
-                                if let Ok(payload) = serde_json::from_slice::<UserMessagePayload>(&publish.payload) {
-                                    let _ = handle_user_message(user_id, payload.content, &db).await;
-                                }
-                            }
-                            _ => {}
+                if parts.len() != 4 || parts[0] != "georuggine" || parts[1] != "client" {
+                    tracing::warn!("topic MQTT con formato inatteso: {topic}");
+                    continue;
+                }
+
+                let Ok(user_id) = parts[2].parse::<i64>() else {
+                    tracing::warn!("topic MQTT con user_id non numerico: {topic}");
+                    continue;
+                };
+
+                match parts[3] {
+                    "position" => match serde_json::from_slice::<PositionUpdatePayload>(&publish.payload) {
+                        Ok(payload) => {
+                            let _ = handle_position_update(
+                                user_id, payload.lat, payload.lon, &db, &active, &mqtt_client,
+                            ).await;
                         }
-                    }
+                        Err(e) => tracing::warn!("payload posizione non valido da user {user_id}: {e}"),
+                    },
+                    "message" => match serde_json::from_slice::<UserMessagePayload>(&publish.payload) {
+                        Ok(payload) => {
+                            let _ = handle_user_message(user_id, payload, &db, &active).await;
+                        }
+                        Err(e) => tracing::warn!("payload messaggio non valido da user {user_id}: {e}"),
+                    },
+                    other => tracing::warn!("topic MQTT sconosciuto: {other} (user {user_id})"),
                 }
             }
             Ok(_) => {}

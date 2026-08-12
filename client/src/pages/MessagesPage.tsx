@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Megaphone } from 'lucide-react';
 import Navbar from '../components/layout/Navbar';
 import ChatSidebar from '../components/messages/ChatSidebar';
@@ -6,12 +6,14 @@ import ChatWindow from '../components/messages/ChatWindow';
 import AnimatedBackground from '../components/ui/AnimatedBackground';
 import { api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
+import { useMqttClient } from '../hooks/useMqttClient';
 
 interface Message {
   id: number;
   sender: 'me' | 'other';
   content: string;
   timestamp: string;
+  sentAt: string;
 }
 
 interface ApiMessage {
@@ -24,10 +26,17 @@ interface ApiMessage {
 
 const BROADCAST_CHAT_ID = 0;
 const ADMIN_CHAT_ID = 1;
+// dopo l'invio, un refetch veloce a botta quasi sicura; se il messaggio non c'è ancora
+// (broker/rete lenti), ci pensa comunque il prossimo poll periodico
+const POST_SEND_REFETCH_MS = 200;
+
+function formatTime(iso: string) {
+  return new Date(iso).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+}
 
 export default function MessagesPage() {
-  const { userId } = useAuth();
-  const [adminId, setAdminId] = useState<number | null>(null);
+  const { userId, token } = useAuth();
+  const { publish } = useMqttClient();
   const [selectedChatId, setSelectedChatId] = useState<number>(ADMIN_CHAT_ID);
   const [adminMessages, setAdminMessages] = useState<Message[]>([]);
   const [broadcastMessages, setBroadcastMessages] = useState<Message[]>([]);
@@ -49,128 +58,64 @@ export default function MessagesPage() {
     },
   ]);
 
-  // PASSO 1: Trova l'ID dell'admin
-  useEffect(() => {
-    const findAdmin = async () => {
-      try {
-        const res = await api.get('/api/users');
-        const admin = (res.data || []).find((u: any) => u.is_admin === true);
-        if (admin) {
-          setAdminId(admin.id);
-        } else {
-          console.error('Nessun admin trovato!');
-        }
-      } catch (e) {
-        console.error('Errore ricerca admin:', e);
-      }
-    };
-    findAdmin();
-  }, []);
+  const fetchMessagesRef = useRef<() => Promise<void>>(async () => {});
 
-  // Carica la conversazione con l'admin
-  const fetchAdminConversation = useCallback(async () => {
-    if (!userId || !adminId) return;
-    try {
-      const res = await api.get(`/api/messages?with=${adminId}&limit=50`);
-      const apiMessages: ApiMessage[] = res.data || [];
-
-      const serverMessages: Message[] = apiMessages.map((msg) => {
-        const isMe = msg.sender_id === userId;
-        return {
-          id: msg.id,
-          sender: isMe ? 'me' : 'other',
-          content: msg.content,
-          timestamp: new Date(msg.sent_at).toLocaleTimeString('it-IT', {
-            hour: '2-digit',
-            minute: '2-digit',
-          }),
-        };
-      }).reverse();
-
-      setAdminMessages(serverMessages);
-
-      const last = serverMessages[serverMessages.length - 1];
-      if (last) {
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === ADMIN_CHAT_ID
-              ? { ...c, lastMessage: last.content, time: last.timestamp }
-              : c
-          )
-        );
-      }
-    } catch (e: any) {
-      console.error('Errore fetch admin conversation:', e.response?.status, e.response?.data);
-    }
-  }, [userId, adminId]);
-
-  // Carica i messaggi broadcast
-  const fetchBroadcasts = useCallback(async () => {
+  const fetchMessages = useCallback(async () => {
+    if (!userId) return;
     try {
       const res = await api.get('/api/messages?limit=50');
-      const apiMessages: ApiMessage[] = (res.data || []).filter(
-        (m) => m.sender_id === null && m.recipient_id === null
-      );
+      const apiMessages: ApiMessage[] = res.data || [];
 
-      const serverMessages: Message[] = apiMessages.map((msg) => ({
-        id: msg.id,
-        sender: 'other' as const,
-        content: msg.content,
-        timestamp: new Date(msg.sent_at).toLocaleTimeString('it-IT', {
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-      })).reverse();
+      const direct: Message[] = [];
+      const broadcast: Message[] = [];
 
-      setBroadcastMessages(serverMessages);
-
-      const last = serverMessages[serverMessages.length - 1];
-      if (last) {
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === BROADCAST_CHAT_ID
-              ? { ...c, lastMessage: last.content, time: last.timestamp }
-              : c
-          )
-        );
+      for (const msg of apiMessages) {
+        const isBroadcast = msg.sender_id === null && msg.recipient_id === null;
+        const mapped: Message = {
+          id: msg.id,
+          sender: isBroadcast ? 'other' : msg.sender_id === userId ? 'me' : 'other',
+          content: msg.content,
+          timestamp: formatTime(msg.sent_at),
+          sentAt: msg.sent_at,
+        };
+        (isBroadcast ? broadcast : direct).push(mapped);
       }
+
+      setAdminMessages(direct);
+      setBroadcastMessages(broadcast);
+
+      setChats((prev) =>
+        prev.map((c) => {
+          const list = c.id === BROADCAST_CHAT_ID ? broadcast : direct;
+          const last = list[list.length - 1];
+          return last ? { ...c, lastMessage: last.content, time: last.timestamp } : c;
+        })
+      );
     } catch (e: any) {
-      console.error('Errore fetch broadcasts:', e.response?.status, e.response?.data);
+      console.error('Errore fetch messaggi:', e.response?.status, e.response?.data);
     }
-  }, []);
+  }, [userId]);
+
+  fetchMessagesRef.current = fetchMessages;
 
   useEffect(() => {
-    fetchAdminConversation();
-    fetchBroadcasts();
-    const interval = setInterval(() => {
-      fetchAdminConversation();
-      fetchBroadcasts();
-    }, 5000);
+    fetchMessages();
+    const interval = setInterval(fetchMessages, 5000);
     return () => clearInterval(interval);
-  }, [fetchAdminConversation, fetchBroadcasts]);
+  }, [fetchMessages]);
 
   const handleSendMessage = async (content: string) => {
-    if (!userId || !adminId) return;
-    try {
-      await api.post('/api/messages/direct', {
-        sender_id: userId,
-        recipient_id: null,
-        content,
-      });
-      await fetchAdminConversation();
-    } catch (e: any) {
-      console.error('Errore invio:', e.response?.status, e.response?.data);
+    if (!userId || !token) {
+      console.error('Impossibile inviare: utente o token mancante');
+      return;
     }
+    const ok = await publish(`georuggine/client/${userId}/message`, { token, content });
+    if (!ok) {
+      console.error('Invio messaggio MQTT fallito');
+      return;
+    }
+    setTimeout(() => fetchMessagesRef.current(), POST_SEND_REFETCH_MS);
   };
-
-  if (!adminId) {
-    return (
-      <div className="min-h-screen relative flex items-center justify-center">
-        <AnimatedBackground />
-        <div className="relative z-10 text-muted">Connessione alla chat...</div>
-      </div>
-    );
-  }
 
   const isBroadcast = selectedChatId === BROADCAST_CHAT_ID;
 
@@ -179,11 +124,7 @@ export default function MessagesPage() {
       <AnimatedBackground />
       <Navbar />
       <div className="relative z-10 pt-20 h-screen flex gap-6 px-6 pb-6">
-        <ChatSidebar
-          chats={chats}
-          activeChat={selectedChatId}
-          onSelectChat={setSelectedChatId}
-        />
+        <ChatSidebar chats={chats} activeChat={selectedChatId} onSelectChat={setSelectedChatId} />
         {isBroadcast ? (
           <ChatWindow
             chatId={BROADCAST_CHAT_ID}
@@ -195,11 +136,7 @@ export default function MessagesPage() {
             readOnly
           />
         ) : (
-          <ChatWindow
-            chatId={ADMIN_CHAT_ID}
-            messages={adminMessages}
-            onSendMessage={handleSendMessage}
-          />
+          <ChatWindow chatId={ADMIN_CHAT_ID} messages={adminMessages} onSendMessage={handleSendMessage} />
         )}
       </div>
     </div>

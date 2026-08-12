@@ -25,7 +25,8 @@ interface ApiMessage {
 
 interface UserItem {
   id: number;
-  username: string;
+  name: string;
+  surname: string;
   state: string;
   is_admin: boolean;
 }
@@ -76,8 +77,9 @@ export default function AdminMessagesPage() {
             hour: '2-digit',
             minute: '2-digit',
           }),
+          sentAt: msg.sent_at,
         };
-      }).reverse();
+      });
 
       setMessages(formatted);
     } catch (e: any) {
@@ -101,7 +103,8 @@ export default function AdminMessagesPage() {
           hour: '2-digit',
           minute: '2-digit',
         }),
-      })).reverse();
+        sentAt: msg.sent_at,
+      }));
 
       setMessages(formatted);
     } catch (e: any) {
@@ -125,7 +128,6 @@ export default function AdminMessagesPage() {
     if (!selectedUserId || !userId) return;
     try {
       await api.post('/api/messages/direct', {
-        sender_id: null,
         recipient_id: selectedUserId,
         content,
       });
@@ -155,7 +157,7 @@ export default function AdminMessagesPage() {
   };
 
   const filteredUsers = users.filter((u) =>
-    (u.username?.toLowerCase() || '').includes(search.toLowerCase())
+    `${u.name} ${u.surname}`.toLowerCase().includes(search.toLowerCase())
   );
 
   const selectedUser = users.find((u) => u.id === selectedUserId);
@@ -219,7 +221,7 @@ export default function AdminMessagesPage() {
                     <User size={18} className="text-neutral-400" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{user.username}</p>
+                    <p className="text-sm font-medium truncate">{user.name} {user.surname}</p>
                     <p className="text-xs text-muted truncate">ID: {user.id}</p>
                   </div>
                   <div
@@ -251,7 +253,7 @@ export default function AdminMessagesPage() {
             chatId={selectedUserId}
             messages={messages}
             onSendMessage={handleSendDirect}
-            title={selectedUser?.username || 'Seleziona un utente'}
+            title={selectedUser ? `${selectedUser.name} ${selectedUser.surname}` : 'Seleziona un utente'}
             icon={<User size={18} className="text-neutral-300" />}
             status={selectedUser?.state || 'Offline'}
           />

@@ -7,7 +7,8 @@ interface Message {
   id: number;
   sender: 'me' | 'other';
   content: string;
-  timestamp: string;
+  timestamp: string; // "HH:MM", per la bolla
+  sentAt: string;     // ISO completo, per raggruppare per giorno
 }
 
 interface ChatWindowProps {
@@ -18,6 +19,46 @@ interface ChatWindowProps {
   icon?: ReactNode;
   status?: string;
   readOnly?: boolean;
+}
+
+function sameDay(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+
+  if (sameDay(d, today)) return 'Oggi';
+  if (sameDay(d, yesterday)) return 'Ieri';
+
+  return d.toLocaleDateString('it-IT', {
+    day: 'numeric',
+    month: 'long',
+    year: d.getFullYear() !== today.getFullYear() ? 'numeric' : undefined,
+  });
+}
+
+type ListItem =
+  | { type: 'separator'; label: string; key: string }
+  | { type: 'message'; msg: Message };
+
+function buildListItems(messages: Message[]): ListItem[] {
+  const items: ListItem[] = [];
+  let lastLabel: string | null = null;
+
+  for (const msg of messages) {
+    const label = dayLabel(msg.sentAt);
+    if (label !== lastLabel) {
+      items.push({ type: 'separator', label, key: `sep-${label}` });
+      lastLabel = label;
+    }
+    items.push({ type: 'message', msg });
+  }
+
+  return items;
 }
 
 export default function ChatWindow({
@@ -58,6 +99,8 @@ export default function ChatWindow({
     );
   }
 
+  const items = buildListItems(messages);
+
   return (
     <GlassCard
       variant="subtle"
@@ -83,33 +126,41 @@ export default function ChatWindow({
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          <AnimatePresence>
-            {messages.map((msg) => (
-              <motion.div
-                key={msg.id}
-                className={`flex ${msg.sender === 'me' ? 'justify-end' : 'justify-start'}`}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-              >
-                <div
-                  className={`max-w-[70%] px-4 py-2.5 rounded-2xl text-sm ${
-                    msg.sender === 'me'
-                      ? 'bg-white text-background rounded-br-md'
-                      : 'bg-white/[0.05] text-foreground rounded-bl-md border border-white/[0.06]'
-                  }`}
+          <AnimatePresence initial={false}>
+            {items.map((item) =>
+              item.type === 'separator' ? (
+                <div key={item.key} className="flex justify-center py-2">
+                  <span className="text-[11px] uppercase tracking-wide text-muted bg-white/[0.04] border border-white/[0.06] rounded-full px-3 py-1">
+                    {item.label}
+                  </span>
+                </div>
+              ) : (
+                <motion.div
+                  key={item.msg.id}
+                  className={`flex ${item.msg.sender === 'me' ? 'justify-end' : 'justify-start'}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
                 >
-                  <p>{msg.content}</p>
-                  <p
-                    className={`text-[10px] mt-1 ${
-                      msg.sender === 'me' ? 'text-neutral-500' : 'text-muted'
+                  <div
+                    className={`max-w-[70%] px-4 py-2.5 rounded-2xl text-sm ${
+                      item.msg.sender === 'me'
+                        ? 'bg-white text-background rounded-br-md'
+                        : 'bg-white/[0.05] text-foreground rounded-bl-md border border-white/[0.06]'
                     }`}
                   >
-                    {msg.timestamp}
-                  </p>
-                </div>
-              </motion.div>
-            ))}
+                    <p>{item.msg.content}</p>
+                    <p
+                      className={`text-[10px] mt-1 ${
+                        item.msg.sender === 'me' ? 'text-neutral-500' : 'text-muted'
+                      }`}
+                    >
+                      {item.msg.timestamp}
+                    </p>
+                  </div>
+                </motion.div>
+              )
+            )}
           </AnimatePresence>
           <div ref={messagesEndRef} />
         </div>

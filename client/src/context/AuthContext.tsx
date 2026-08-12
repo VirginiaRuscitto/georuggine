@@ -4,6 +4,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isAdmin: boolean;
   userId: number | null;
+  token: string | null;
   login: (token: string) => boolean;
   logout: () => void;
   loading: boolean;
@@ -24,15 +25,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userId, setUserId] = useState<number | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      const payload = readTokenPayload(token);
+    const stored = localStorage.getItem('token');
+    if (stored) {
+      const payload = readTokenPayload(stored);
       if (payload) {
         setIsAdmin(payload.is_admin || false);
         setUserId(payload.user_id ?? payload.id ?? payload.sub ?? null);
+        setToken(stored);
         setIsAuthenticated(true);
       } else {
         localStorage.removeItem('token');
@@ -41,12 +44,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(false);
   }, []);
 
-  const login = (token: string): boolean => {
-    localStorage.setItem('token', token);
-    const payload = readTokenPayload(token);
+  const login = (newToken: string): boolean => {
+    localStorage.setItem('token', newToken);
+    const payload = readTokenPayload(newToken);
     const admin = payload?.is_admin || false;
     setIsAdmin(admin);
     setUserId(payload?.user_id ?? payload?.id ?? payload?.sub ?? null);
+    setToken(newToken);
     setIsAuthenticated(true);
     return admin;
   };
@@ -56,10 +60,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsAuthenticated(false);
     setIsAdmin(false);
     setUserId(null);
+    setToken(null);
   };
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, isAdmin, userId, login, logout, loading }}>
+    <AuthContext.Provider value={{ isAuthenticated, isAdmin, userId, token, login, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );

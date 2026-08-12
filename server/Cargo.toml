@@ -14,7 +14,6 @@ rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 jsonwebtoken = "9"
 argon2 = "0.5"
 rand = "0.8"
-validator = { version = "0.18", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
@@ -22,3 +21,4 @@ dotenvy = "0.15"
 sysinfo = "0.30"
 rumqttc = "0.24"
 futures = "0.3"
+validator = { version = "0.19", features = ["derive"] }
