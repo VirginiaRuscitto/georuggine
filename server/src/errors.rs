@@ -1,11 +1,18 @@
 use axum::{http::StatusCode, response::{IntoResponse, Response}, Json};
+use rumqttc::{AsyncClient, QoS};
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
+#[derive(Debug, Serialize, Clone)]
+pub struct ErrorPayload {
     pub error: String,
 }
-
+ 
+impl ErrorPayload {
+    pub fn new(msg: impl Into<String>) -> Self {
+        Self { error: msg.into() }
+    }
+}
+ 
 pub fn error_response(status: StatusCode, msg: &str) -> Response {
-    (status, Json(ErrorResponse { error: msg.into() })).into_response()
+    (status, Json(ErrorPayload::new(msg))).into_response()
 }

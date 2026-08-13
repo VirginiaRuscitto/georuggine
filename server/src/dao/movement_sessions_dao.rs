@@ -1,7 +1,7 @@
 use crate::database::connection::SharedDb;
 use crate::models::{MovementSession, MovementState};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension, Result, Row};
+use rusqlite::{params, Result, Row};
 
 fn row_to_session(row: &Row) -> Result<MovementSession> {
     Ok(MovementSession {

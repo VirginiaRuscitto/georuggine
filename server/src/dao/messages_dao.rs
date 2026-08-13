@@ -2,8 +2,6 @@ use crate::database::connection::SharedDb;
 use crate::models::Message;
 use rusqlite::{params, Result, Row};
 
-const MAX_MESSAGE_LEN: usize = 1000;
-
 fn row_to_message(row: &Row) -> Result<Message> {
     Ok(Message {
         id: row.get("id")?,
@@ -12,17 +10,6 @@ fn row_to_message(row: &Row) -> Result<Message> {
         content: row.get("content")?,
         sent_at: row.get("sent_at")?,
     })
-}
-
-pub fn validate_content(content: &str) -> std::result::Result<&str, &'static str> {
-    let c = content.trim();
-    if c.is_empty() {
-        return Err("Il contenuto del messaggio non può essere vuoto");
-    }
-    if c.chars().count() > MAX_MESSAGE_LEN {
-        return Err("Messaggio troppo lungo (max 1000 caratteri)");
-    }
-    Ok(c)
 }
 
 pub fn insert_message(db: &SharedDb, sender_id: Option<i64>, recipient_id: Option<i64>, content: &str) -> Result<i64> {

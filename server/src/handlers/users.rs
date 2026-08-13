@@ -11,15 +11,12 @@ use axum::extract::Query;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use crate::{
-    auth,
     dao::users_dao,
     dao::users_dao::OrderBy,
     errors::error_response,
     models::UserState,
     state::AppState,
     auth::jwt_auth_middleware,
-    handlers::report::ReportQuery,
-    models::ReportPeriod,
 };
 
 #[derive(Serialize)]
@@ -47,12 +44,7 @@ pub struct UsersQuery {
 /// Ritorna la lista completa degli utenti registrati.
 pub async fn get_users_handler(State(state): State<AppState>, Query(params): Query<UsersQuery>) -> Response {
     let users = match users_dao::get_all_users(
-        &state.db,
-        params.search,
-        params.order_by,
-        params.is_admin,
-        params.limit,
-        params.offset
+        &state.db, params.search, params.order_by, params.is_admin, params.limit, params.offset,
     ) {
         Ok(u) => u,
         Err(e) => {
@@ -63,29 +55,10 @@ pub async fn get_users_handler(State(state): State<AppState>, Query(params): Que
 
     let active = state.active_users.read().unwrap();
 
-    if params.state.is_some(){
-        let result: Vec<UserStatus> = users
-            .into_iter()
-            .filter(|u| active.get(&u.id).unwrap().state == params.state.unwrap())
-            .map(|u| UserStatus {
-                id: u.id,
-                name: u.name,
-                surname: u.surname,
-                email: u.email,
-                created_at: u.created_at,
-                state: active.get(&u.id).unwrap().state,
-                is_admin: u.is_admin,
-            })
-            .collect();
-
-        return Json(result).into_response()
-    }
-
-    //else
-    let result: Vec<UserStatus> = users
+    let mut result: Vec<UserStatus> = users
         .into_iter()
         .map(|u| UserStatus {
-            id: u.id,                        // <-- aggiunto
+            id: u.id,
             name: u.name,
             surname: u.surname,
             email: u.email,
@@ -95,8 +68,13 @@ pub async fn get_users_handler(State(state): State<AppState>, Query(params): Que
         })
         .collect();
 
+    if let Some(state_filter) = params.state {
+        result.retain(|u| u.state == state_filter);
+    }
+
     Json(result).into_response()
 }
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/users", get(get_users_handler))

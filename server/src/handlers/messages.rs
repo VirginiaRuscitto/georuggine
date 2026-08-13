@@ -15,6 +15,7 @@ use crate::{
     state::AppState,
 };
 
+const MAX_MESSAGE_LEN: usize = 1000;
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
 
@@ -39,6 +40,17 @@ pub struct BroadcastRequest {
 struct SendResult {
     id: i64,
     queued: bool,
+}
+
+pub fn validate_content(content: &str) -> std::result::Result<&str, &'static str> {
+    let c = content.trim();
+    if c.is_empty() {
+        return Err("Il contenuto del messaggio non può essere vuoto");
+    }
+    if c.chars().count() > MAX_MESSAGE_LEN {
+        return Err("Messaggio troppo lungo (max 1000 caratteri)");
+    }
+    Ok(c)
 }
 
 async fn publish(mqtt_client: &AsyncClient, topic: impl Into<String>, payload: serde_json::Value) -> bool {
@@ -80,7 +92,7 @@ pub async fn post_direct_message(
     State(state): State<AppState>,
     Json(body): Json<DirectMessageRequest>,
 ) -> impl IntoResponse {
-    let content = match messages_dao::validate_content(&body.content) {
+    let content = match validate_content(&body.content) {
         Ok(c) => c,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, msg),
     };
@@ -113,7 +125,7 @@ pub async fn post_broadcast_handler(
     State(state): State<AppState>,
     Json(body): Json<BroadcastRequest>,
 ) -> impl IntoResponse {
-    let content = match messages_dao::validate_content(&body.content) {
+    let content = match validate_content(&body.content) {
         Ok(c) => c,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, msg),
     };
