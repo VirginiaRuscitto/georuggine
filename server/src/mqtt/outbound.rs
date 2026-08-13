@@ -41,13 +41,25 @@ async fn publish_json(mqtt_client: &AsyncClient, topic: impl Into<String>, paylo
 
 //Notifica un messaggio diretto admin -> singolo camionista.
 pub async fn notify_direct_message(mqtt_client: &AsyncClient, user_id: i64, message_id: i64, content: &str) -> bool {
-    let payload = serde_json::json!({ "type": "direct", "id": message_id, "from": "server", "content": content });
+    let payload = serde_json::json!({
+        "type": "direct",
+        "id": message_id,
+        "from": "server",
+        "content": content,
+        "timestamp": Utc::now().to_rfc3339(),
+    });
     publish_json(mqtt_client, topic_direct(user_id), payload).await
 }
 
 //Notifica un messaggio broadcast admin -> tutti.
 pub async fn notify_broadcast_message(mqtt_client: &AsyncClient, message_id: i64, content: &str) -> bool {
-    let payload = serde_json::json!({ "type": "broadcast", "id": message_id, "content": content });
+    let payload = serde_json::json!({
+        "type": "broadcast",
+        "id": message_id,
+        "from": "server",
+        "content": content,
+        "timestamp": Utc::now().to_rfc3339(),
+    });
     publish_json(mqtt_client, topic_broadcast(), payload).await
 }
 

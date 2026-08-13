@@ -1,5 +1,4 @@
 use axum::{http::StatusCode, response::{IntoResponse, Response}, Json};
-use rumqttc::{AsyncClient, QoS};
 use serde::Serialize;
 
 #[derive(Debug, Serialize, Clone)]

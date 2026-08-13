@@ -6,12 +6,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use rumqttc::{AsyncClient, QoS};
 use serde::{Deserialize, Serialize};
 use crate::{
     auth::{self, Claims},
     dao::{messages_dao, users_dao},
     errors::error_response,
+    mqtt::outbound,
     state::AppState,
 };
 
@@ -53,17 +53,7 @@ pub fn validate_content(content: &str) -> std::result::Result<&str, &'static str
     Ok(c)
 }
 
-async fn publish(mqtt_client: &AsyncClient, topic: impl Into<String>, payload: serde_json::Value) -> bool {
-    match mqtt_client.publish(topic.into(), QoS::AtLeastOnce, false, payload.to_string()).await {
-        Ok(_) => true,
-        Err(e) => {
-            tracing::error!("errore invio MQTT: {e}");
-            false
-        }
-    }
-}
-
-pub async fn get_messages_handler(
+async fn get_messages_handler(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Query(params): Query<MessagesQuery>,
@@ -88,7 +78,7 @@ pub async fn get_messages_handler(
     }
 }
 
-pub async fn post_direct_message(
+async fn post_direct_message(
     State(state): State<AppState>,
     Json(body): Json<DirectMessageRequest>,
 ) -> impl IntoResponse {
@@ -114,14 +104,12 @@ pub async fn post_direct_message(
         }
     };
 
-    let topic = format!("georuggine/server/{}/direct", body.recipient_id);
-    let payload = serde_json::json!({ "type": "direct", "id": message_id, "from": "server", "content": content });
-    let queued = publish(&state.mqtt_client, topic, payload).await;
+    let queued = outbound::notify_direct_message(&state.mqtt_client, body.recipient_id, message_id, content).await;
 
     Json(SendResult { id: message_id, queued }).into_response()
 }
 
-pub async fn post_broadcast_handler(
+async fn post_broadcast_handler(
     State(state): State<AppState>,
     Json(body): Json<BroadcastRequest>,
 ) -> impl IntoResponse {
@@ -138,8 +126,7 @@ pub async fn post_broadcast_handler(
         }
     };
 
-    let payload = serde_json::json!({ "type": "broadcast", "id": message_id, "content": content });
-    let queued = publish(&state.mqtt_client, "georuggine/server/broadcast", payload).await;
+    let queued = outbound::notify_broadcast_message(&state.mqtt_client, message_id, content).await;
 
     Json(SendResult { id: message_id, queued }).into_response()
 }

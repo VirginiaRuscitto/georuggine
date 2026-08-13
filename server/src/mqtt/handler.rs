@@ -7,6 +7,7 @@ use rumqttc::{AsyncClient, Event, EventLoop, Packet, QoS};
 use serde::Deserialize;
 use crate::dao::{messages_dao, movement_sessions_dao, position_log_dao};
 use crate::handlers::messages;
+use crate::mqtt::outbound;
 
 pub const STALE_AFTER_SECS: i64 = 180; //movimento -> fermo senza cambi coordinate
 pub const COORD_EPSILON: f64 = 0.0001; //soglia per considerare due coordinate "diverse"
@@ -26,7 +27,6 @@ pub struct UserMessagePayload {
     pub content: String,
 }
 
-
 fn is_mqtt_token_valid(token: &str, user_id: i64) -> bool {
     match auth::verify_jwt(token) {
         Ok(claims) if claims.sub == user_id => true,
@@ -41,18 +41,6 @@ fn is_mqtt_token_valid(token: &str, user_id: i64) -> bool {
             tracing::warn!("MQTT rifiutato: token non valido per user {user_id}");
             false
         }
-    }
-}
-
-async fn notify_state_change(mqtt_client: &AsyncClient, user_id: i64, state: UserState, at: DateTime<Utc>) {
-    let topic = format!("georuggine/server/{}/state", user_id);
-    let payload = serde_json::json!({
-        "user_id": user_id,
-        "state": state,
-        "timestamp": at.to_rfc3339()
-    });
-    if let Err(e) = mqtt_client.publish(topic, QoS::AtLeastOnce, false, payload.to_string()).await {
-        tracing::error!("errore invio notifica stato per user {user_id}: {e}");
     }
 }
 
@@ -113,7 +101,7 @@ fn update_session_position(
 }
 
 /// Gestisce l'aggiornamento della posizione del veicolo (ricevuto ogni 30s)
-pub async fn handle_position_update(
+async fn handle_position_update(
     user_id: i64,
     payload: PositionUpdatePayload,
     db: &SharedDb,
@@ -136,18 +124,39 @@ pub async fn handle_position_update(
 
     if let Some(new_state) = transition_to {
         movement_sessions_dao::transition_session(db, user_id, MovementState::from(new_state), now)?;
-        notify_state_change(mqtt_client, user_id, new_state, now).await;
+        outbound::notify_state_change(mqtt_client, user_id, new_state, now).await;
     }
 
     Ok(())
 }
+
+fn check_and_update_rate_limit(active: &ActiveUsers, user_id: i64, now: DateTime<Utc>) -> bool {
+    let mut users = active.write().unwrap();
+    let session = users.entry(user_id).or_insert_with(|| UserSession {
+        last_position: None,
+        last_change_at: now,
+        last_seen_at: now,
+        last_message_at: None,
+        state: UserState::Stopped,
+    });
+
+    if let Some(last) = session.last_message_at {
+        if now.signed_duration_since(last).num_seconds() < MIN_MESSAGE_INTERVAL_SECS {
+            return false;
+        }
+    }
+    session.last_message_at = Some(now);
+    true
+}
+
 //Salva nel DB un messaggio inviato da un utente al server (sender = utente, recipient = NULL).
 //Applica un rate limit (1 messaggio/secondo per utente) per evitare che un client in loop riempia la tabella messages senza controllo.
-pub async fn handle_user_message(
+async fn handle_user_message(
     user_id: i64,
     payload: UserMessagePayload,
     db: &SharedDb,
     active: &ActiveUsers,
+    mqtt_client: &AsyncClient,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !is_mqtt_token_valid(&payload.token, user_id) {
         return Ok(());
@@ -155,34 +164,23 @@ pub async fn handle_user_message(
 
     let content = match messages::validate_content(&payload.content) {
         Ok(c) => c,
-        Err(msg) => { //TODO vedere che fare col messaggio di validate
+        Err(msg) => {
             tracing::warn!("messaggio MQTT scartato da user {user_id}: {msg}");
+            outbound::notify_error(mqtt_client, user_id, msg).await;
             return Ok(());
         }
     };
 
     let now = Utc::now();
-    {
-        let mut users = active.write().unwrap();
-        let session = users.entry(user_id).or_insert_with(|| UserSession {
-            last_position: None,
-            last_change_at: now,
-            last_seen_at: now,
-            last_message_at: None,
-            state: UserState::Stopped,
-        });
-
-        if let Some(last) = session.last_message_at {
-            if now.signed_duration_since(last).num_seconds() < MIN_MESSAGE_INTERVAL_SECS {
-                tracing::warn!("messaggio MQTT scartato da user {user_id}: rate limit superato");
-                return Ok(());
-            }
-        }
-        session.last_message_at = Some(now);
+    if !check_and_update_rate_limit(active, user_id, now) {
+        tracing::warn!("messaggio MQTT scartato da user {user_id}: rate limit superato");
+        outbound::notify_error(mqtt_client, user_id, "Troppi messaggi in un breve intervallo, riprova tra poco").await;
+        return Ok(());
     }
 
     if let Err(e) = messages_dao::insert_message(db, Some(user_id), None, content) {
         tracing::error!("errore salvataggio messaggio da user {user_id}: {e}");
+        outbound::notify_error(mqtt_client, user_id, "Impossibile salvare il messaggio").await;
     }
 
     Ok(())
@@ -224,7 +222,7 @@ pub async fn stale_state_watcher(active: ActiveUsers, db: SharedDb, mqtt_client:
             if let Err(e) = movement_sessions_dao::transition_session(&db, user_id, MovementState::Stopped, now) {
                 tracing::error!("errore transizione stato per user {}: {:?}", user_id, e);
             }
-            notify_state_change(&mqtt_client, user_id, UserState::Stopped, now).await;
+            outbound::notify_state_change(&mqtt_client, user_id, UserState::Stopped, now).await;
         }
 
         for user_id in became_disconnected {
@@ -272,7 +270,7 @@ pub async fn start_mqtt_listener(
                     },
                     "message" => match serde_json::from_slice::<UserMessagePayload>(&publish.payload) {
                         Ok(payload) => {
-                            if let Err(e) = handle_user_message(user_id, payload, &db, &active).await {
+                            if let Err(e) = handle_user_message(user_id, payload, &db, &active, &mqtt_client).await {
                                 tracing::error!("errore gestione messaggio per user {user_id}: {e}");
                             }
                         }
