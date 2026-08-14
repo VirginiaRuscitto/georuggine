@@ -26,8 +26,8 @@ pub struct ReportQuery {
 pub async fn get_report_handler(State(state): State<AppState>, Query(params): Query<ReportQuery>) -> Response {
     let (start, end) = get_start_end_from_report_period(params.period);
 
-    let user_exists = match users_dao::get_user_by_id(&state.db, params.user_id) {
-        Ok(Some(_)) => true,
+    match users_dao::get_user_by_id(&state.db, params.user_id) {
+        Ok(Some(_)) => {}
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
         Err(e) => {
             tracing::error!("errore get_user_by_id: {e}");
@@ -51,8 +51,8 @@ pub async fn get_report_handler(State(state): State<AppState>, Query(params): Qu
         }
     };
 
-    let avg_speed_kmh = compute_avg_speed_kmh(&positions);
     let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, start, end);
+    let avg_speed_kmh = compute_avg_speed_kmh(&positions, movement_duration_secs);
 
     let report = RouteReport {
         user_id: params.user_id,
@@ -116,27 +116,20 @@ pub fn haversine_distance_km(p1: &Position, p2: &Position) -> f64 {
     EARTH_RADIUS_KM * c
 }
 
-pub fn compute_avg_speed_kmh(positions: &[Position]) -> f64 {
-    if positions.len() < 2 {
+pub fn compute_avg_speed_kmh(positions: &[Position], movement_duration_secs: i64) -> f64 {
+    if positions.len() < 2 || movement_duration_secs <= 0 {
         return 0.0;
     }
+
+    const MAX_GAP_SECS: i64 = 90; //3x l'intervallo di invio (30s) e vuol dire coppia non contigua, probabile disconnessione
 
     let total_distance_km: f64 = positions
         .windows(2)
+        .filter(|pair| (pair[1].recorded_at - pair[0].recorded_at).num_seconds() <= MAX_GAP_SECS)
         .map(|pair| haversine_distance_km(&pair[0], &pair[1]))
         .sum();
 
-    let start_time = positions.first().unwrap().recorded_at;
-    let end_time = positions.last().unwrap().recorded_at;
-
-    let total_duration_secs = (end_time - start_time).num_milliseconds() as f64 / 1000.0;
-
-    if total_duration_secs <= 0.0 {
-        return 0.0;
-    }
-
-    let total_hours = total_duration_secs / 3600.0;
-
+    let total_hours = movement_duration_secs as f64 / 3600.0;
     total_distance_km / total_hours
 }
 

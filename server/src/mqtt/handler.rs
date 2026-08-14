@@ -44,24 +44,27 @@ fn is_mqtt_token_valid(token: &str, user_id: i64) -> bool {
     }
 }
 
-/// Verifica la transizione di stato tra due coordinate o in base al tempo
-fn check_state_transition(
-    old_pos: Option<&Position>,
-    new_pos: &Position,
-    last_change_at: DateTime<Utc>,
-    now: DateTime<Utc>,
-) -> Option<UserState> {
-    let coords_changed = match old_pos {
+fn coords_changed(old_pos: Option<&Position>, new_pos: &Position) -> bool {
+    match old_pos {
         Some(prev) => {
             (prev.lat - new_pos.lat).abs() > COORD_EPSILON || (prev.lon - new_pos.lon).abs() > COORD_EPSILON
         }
         None => false,
-    };
+    }
+}
 
-    if coords_changed {
-        Some(UserState::Moving)
-    } else if now.signed_duration_since(last_change_at).num_seconds() >= STALE_AFTER_SECS {
-        Some(UserState::Stopped)
+/// Verifica la transizione di stato tra due coordinate o in base al tempo
+/// Fermo->Movimento: appena il cambio è stato rilevato
+/// Movimento->Fermo: il momento in cui le coordinate hanno smesso di cambiare, non quello in cui ce ne accorgiamo 
+fn check_state_transition(
+    moved: bool,
+    last_coord_change_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<(UserState, DateTime<Utc>)> {
+    if moved {
+        Some((UserState::Moving, now))
+    } else if now.signed_duration_since(last_coord_change_at).num_seconds() >= STALE_AFTER_SECS {
+        Some((UserState::Stopped, last_coord_change_at))
     } else {
         None
     }
@@ -74,30 +77,39 @@ fn update_session_position(
     user_id: i64,
     new_pos: Position,
     now: DateTime<Utc>,
-) -> (Option<UserState>, bool) {
+) -> (Option<(UserState, DateTime<Utc>)>, bool) {
     let mut users = active.write().unwrap();
     let is_new_session = !users.contains_key(&user_id);
-    let session = users.entry(user_id).or_insert_with(|| UserSession {
-        last_position: None,
-        last_change_at: now,
-        last_seen_at: now,
-        last_message_at: None,
-        state: UserState::Stopped,
-    });
+    let session = users.entry(user_id).or_insert_with(|| UserSession::new(now));
 
-    session.last_seen_at = now; //ogni posizione ricevuta conta come "visto ora"
+    session.last_seen_at = now;
 
-    let mut transition_to = None;
-    if let Some(new_state) = check_state_transition(session.last_position.as_ref(), &new_pos, session.last_change_at, now) {
+    let moved = coords_changed(session.last_position.as_ref(), &new_pos);
+    if moved {
+        session.last_coord_change_at = now;
+    }
+
+    let mut transition = None;
+    if let Some((new_state, transition_at)) = check_state_transition(moved, session.last_coord_change_at, now) {
         if session.state != new_state {
             session.state = new_state;
-            session.last_change_at = now;
-            transition_to = Some(new_state);
+            session.last_change_at = transition_at;
+            transition = Some((new_state, transition_at));
         }
     }
     session.last_position = Some(new_pos);
 
-    (transition_to, is_new_session)
+    (transition, is_new_session)
+}
+
+fn validate_coordinates(lat: f64, lon: f64) -> Result<(), &'static str> {
+    if !lat.is_finite() || !lon.is_finite() {
+        return Err("Coordinate non valide");
+    }
+    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+        return Err("Coordinate fuori range");
+    }
+    Ok(())
 }
 
 /// Gestisce l'aggiornamento della posizione del veicolo (ricevuto ogni 30s)
@@ -107,38 +119,46 @@ async fn handle_position_update(
     db: &SharedDb,
     active: &ActiveUsers,
     mqtt_client: &AsyncClient,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) {
     if !is_mqtt_token_valid(&payload.token, user_id) {
-        return Ok(());
+        return;
+    }
+
+    if let Err(msg) = validate_coordinates(payload.lat, payload.lon) {
+        tracing::warn!("posizione MQTT scartata da user {user_id}: {msg}");
+        outbound::notify_error(mqtt_client, user_id, msg).await;
+        return;
     }
 
     let now = Utc::now();
     let new_pos = Position { lat: payload.lat, lon: payload.lon, recorded_at: now };
-    position_log_dao::insert_position(db, user_id, payload.lat, payload.lon, now)?;
 
-    let (transition_to, is_new_session) = update_session_position(active, user_id, new_pos, now);
+    if let Err(e) = position_log_dao::insert_position(db, user_id, payload.lat, payload.lon, now) {
+        tracing::error!("errore salvataggio posizione per user {user_id}: {e}");
+        outbound::notify_error(mqtt_client, user_id, "Impossibile salvare la posizione").await;
+        return;
+    }
+
+    let (transition, is_new_session) = update_session_position(active, user_id, new_pos, now);
 
     if is_new_session {
-        movement_sessions_dao::insert_movement_session(db, user_id, MovementState::Stopped, now)?;
+        if let Err(e) = movement_sessions_dao::insert_movement_session(db, user_id, MovementState::Stopped, now) {
+            tracing::error!("errore creazione sessione per user {user_id}: {e}");
+        }
     }
 
-    if let Some(new_state) = transition_to {
-        movement_sessions_dao::transition_session(db, user_id, MovementState::from(new_state), now)?;
-        outbound::notify_state_change(mqtt_client, user_id, new_state, now).await;
+    if let Some((new_state, transition_at)) = transition {
+        if let Err(e) = movement_sessions_dao::transition_session(db, user_id, MovementState::from(new_state), transition_at) {
+            tracing::error!("errore transizione stato per user {user_id}: {e}");
+        }
+        outbound::notify_state_change(mqtt_client, user_id, new_state, transition_at).await;
     }
-
-    Ok(())
 }
 
 fn check_and_update_rate_limit(active: &ActiveUsers, user_id: i64, now: DateTime<Utc>) -> bool {
     let mut users = active.write().unwrap();
-    let session = users.entry(user_id).or_insert_with(|| UserSession {
-        last_position: None,
-        last_change_at: now,
-        last_seen_at: now,
-        last_message_at: None,
-        state: UserState::Stopped,
-    });
+    let session = users.entry(user_id).or_insert_with(|| UserSession::new(now));
+    session.last_seen_at = now; //un messaggio è comunque un segnale di vita
 
     if let Some(last) = session.last_message_at {
         if now.signed_duration_since(last).num_seconds() < MIN_MESSAGE_INTERVAL_SECS {
@@ -157,9 +177,9 @@ async fn handle_user_message(
     db: &SharedDb,
     active: &ActiveUsers,
     mqtt_client: &AsyncClient,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) {
     if !is_mqtt_token_valid(&payload.token, user_id) {
-        return Ok(());
+        return;
     }
 
     let content = match messages::validate_content(&payload.content) {
@@ -167,7 +187,7 @@ async fn handle_user_message(
         Err(msg) => {
             tracing::warn!("messaggio MQTT scartato da user {user_id}: {msg}");
             outbound::notify_error(mqtt_client, user_id, msg).await;
-            return Ok(());
+            return;
         }
     };
 
@@ -175,15 +195,13 @@ async fn handle_user_message(
     if !check_and_update_rate_limit(active, user_id, now) {
         tracing::warn!("messaggio MQTT scartato da user {user_id}: rate limit superato");
         outbound::notify_error(mqtt_client, user_id, "Troppi messaggi in un breve intervallo, riprova tra poco").await;
-        return Ok(());
+        return;
     }
 
     if let Err(e) = messages_dao::insert_message(db, Some(user_id), None, content) {
         tracing::error!("errore salvataggio messaggio da user {user_id}: {e}");
         outbound::notify_error(mqtt_client, user_id, "Impossibile salvare il messaggio").await;
     }
-
-    Ok(())
 }
 
 /// Task periodico che controlla l'inattività dei veicoli e forza lo stato "Stopped" dopo 3 minuti
@@ -202,31 +220,31 @@ pub async fn stale_state_watcher(active: ActiveUsers, db: SharedDb, mqtt_client:
             let mut users = active.write().unwrap();
             users.retain(|&user_id, session| {
                 if now.signed_duration_since(session.last_seen_at).num_seconds() >= DISCONNECT_AFTER_SECS {
-                    became_disconnected.push(user_id);
+                    became_disconnected.push((user_id, session.last_seen_at));
                     return false;
                 }
 
                 if session.state == UserState::Moving
-                    && now.signed_duration_since(session.last_change_at).num_seconds() >= STALE_AFTER_SECS
+                    && now.signed_duration_since(session.last_coord_change_at).num_seconds() >= STALE_AFTER_SECS
                 {
                     session.state = UserState::Stopped;
-                    session.last_change_at = now;
-                    became_stopped.push(user_id);
+                    session.last_change_at = session.last_coord_change_at;
+                    became_stopped.push((user_id, session.last_coord_change_at));
                 }
 
                 true
             });
         }
 
-        for user_id in became_stopped {
-            if let Err(e) = movement_sessions_dao::transition_session(&db, user_id, MovementState::Stopped, now) {
+        for (user_id, transition_at) in became_stopped {
+            if let Err(e) = movement_sessions_dao::transition_session(&db, user_id, MovementState::Stopped, transition_at) {
                 tracing::error!("errore transizione stato per user {}: {:?}", user_id, e);
             }
-            outbound::notify_state_change(&mqtt_client, user_id, UserState::Stopped, now).await;
+            outbound::notify_state_change(&mqtt_client, user_id, UserState::Stopped, transition_at).await;
         }
 
-        for user_id in became_disconnected {
-            if let Err(e) = movement_sessions_dao::close_movement_session_for_user(&db, user_id, now) {
+        for (user_id, disconnected_at) in became_disconnected {
+            if let Err(e) = movement_sessions_dao::close_movement_session_for_user(&db, user_id, disconnected_at) {
                 tracing::error!("errore chiusura sessione per user disconnesso {}: {:?}", user_id, e);
             }
         }
@@ -261,19 +279,11 @@ pub async fn start_mqtt_listener(
 
                 match parts[3] {
                     "position" => match serde_json::from_slice::<PositionUpdatePayload>(&publish.payload) {
-                        Ok(payload) => {
-                            if let Err(e) = handle_position_update(user_id, payload, &db, &active, &mqtt_client).await {
-                                tracing::error!("errore gestione posizione per user {user_id}: {e}");
-                            }
-                        }
+                        Ok(payload) => handle_position_update(user_id, payload, &db, &active, &mqtt_client).await,
                         Err(e) => tracing::warn!("payload posizione non valido da user {user_id}: {e}"),
                     },
                     "message" => match serde_json::from_slice::<UserMessagePayload>(&publish.payload) {
-                        Ok(payload) => {
-                            if let Err(e) = handle_user_message(user_id, payload, &db, &active, &mqtt_client).await {
-                                tracing::error!("errore gestione messaggio per user {user_id}: {e}");
-                            }
-                        }
+                        Ok(payload) => handle_user_message(user_id, payload, &db, &active, &mqtt_client).await,
                         Err(e) => tracing::warn!("payload messaggio non valido da user {user_id}: {e}"),
                     },
                     other => tracing::warn!("topic MQTT sconosciuto: {other} (user {user_id})"),

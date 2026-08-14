@@ -25,7 +25,7 @@ pub fn insert_movement_session(db: &SharedDb, user_id: i64, state: MovementState
 pub fn close_movement_session_for_user(db: &SharedDb, user_id: i64, ended_at: DateTime<Utc>) -> Result<()> {
     let conn = db.lock().unwrap();
     conn.execute(
-        "UPDATE movement_sessions SET ended_at = ?1 WHERE user_id = ?2 AND ended_at IS NULL",
+        "UPDATE movement_sessions SET ended_at = ?1 WHERE user_id = ?2 AND ended_at IS NULL AND started_at <= ?1", //l'ultimo check è per evitare la race condition con la rimozione dell'utente da active users (se in quella finestra arriva una nuova posizione dallo stesso utente, update_session_position lo vede assente dalla mappa e crea una nuova sessione che si potrebbe confondere con quella da eliminare)
         params![ended_at, user_id],
     )?;
     Ok(())

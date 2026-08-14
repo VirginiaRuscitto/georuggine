@@ -10,7 +10,6 @@ mod state;
 
 use tower_http::cors::{Any, CorsLayer};
 use axum::http::{Method, header};
-use axum::routing::{get, post};
 use axum::Router;
 use rumqttc::{AsyncClient, MqttOptions};
 use std::collections::HashMap;
