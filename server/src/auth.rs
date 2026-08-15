@@ -7,11 +7,11 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use chrono::{Duration, Utc};
 use axum::{
-    extract::{Extension, Request, State, Path},
+    extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{post, delete, get, put},
+    routing::{post},
     Json,
     Router,
 };
@@ -244,85 +244,15 @@ async fn login_handler(State(db): State<SharedDb>, Json(body): Json<LoginRequest
     }
 }
 
-async fn me_handler(
-    Extension(claims): Extension<Claims>,
-    State(db): State<SharedDb>,
-) -> Response {
-    match users_dao::get_user_by_id(&db, claims.sub) {
-        Ok(Some(user)) => (StatusCode::OK, Json(user)).into_response(),
-        Ok(None) => error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
-        Err(e) => {
-            tracing::error!("errore get_user_by_id: {e}");
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore del server")
-        }
-    }
-}
-
-async fn delete_user_handler(State(state): State<AppState>, Extension(claims): Extension<Claims>, Path(user_id): Path<i64>) -> Response {
-    if claims.sub == user_id {
-        return error_response(StatusCode::BAD_REQUEST, "Non puoi eliminare il tuo stesso account");
-    }
-    match users_dao::delete_user(&state.db, user_id) {
-        Ok(true) => {
-            state.active_users.write().unwrap().remove(&user_id);
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
-        Err(e) => {
-            tracing::error!("errore eliminazione utente: {e}");
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile eliminare l'utente. Riprova più tardi")
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct UpdateAdminRequest {
-    is_admin: bool,
-}
-
-async fn update_user_admin_handler(
-    State(db): State<SharedDb>,
-    Extension(claims): Extension<Claims>,
-    Path(user_id): Path<i64>,
-    Json(body): Json<UpdateAdminRequest>,
-) -> Response {
-    if claims.sub == user_id {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "Non puoi modificare il tuo stesso account",
-        );
-    }
-    match users_dao::set_user_admin(&db, user_id, body.is_admin) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
-        Err(e) => {
-            tracing::error!("errore update admin utente: {e}");
-            error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Impossibile aggiornare l'utente. Riprova più tardi",
-            )
-        }
-    }
-}
-
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/register", post(register_handler))
         .route("/api/login", post(login_handler))
-        .merge(protected_router())
         .merge(admin_router())
-}
-
-fn protected_router() -> Router<AppState> {
-    Router::new()
-        .route("/api/me", get(me_handler))
-        .layer(middleware::from_fn(jwt_auth_middleware))
 }
 
 fn admin_router() -> Router<AppState> {
     Router::new()
         .route("/api/admin/register", post(register_by_admin_handler))
-        .route("/api/admin/users/:user_id", delete(delete_user_handler))
-        .route("/api/admin/users/:user_id/admin", put(update_user_admin_handler))
         .layer(middleware::from_fn(jwt_admin_middleware))
 }

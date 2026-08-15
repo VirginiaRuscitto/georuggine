@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 //TODO: aggiustare i derive
 
-//TODO: posso metterlo nel file state.rs solo per mauro o viene richiamato da qualche api?
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UserState {

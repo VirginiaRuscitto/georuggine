@@ -52,36 +52,35 @@ pub fn get_user_by_id(db: &SharedDb, user_id: i64) -> Result<Option<User>> {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
-enum Direction{
-    ASC,
-    DESC,
+#[serde(rename_all = "snake_case")]
+pub enum OrderByField {
+    Name,
+    Surname,
+    CreatedAt,
 }
 
-impl Direction{
-    fn to_sql(&self) -> &str{
+impl OrderByField {
+    fn column(&self) -> &'static str {
         match self {
-            Direction::ASC => "ASC",
-            Direction::DESC => "DESC"
+            OrderByField::Name => "name",
+            OrderByField::Surname => "surname",
+            OrderByField::CreatedAt => "created_at",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OrderBy{
-    NAME(Direction),
-    SURNAME(Direction),
-    CREATED_AT(Direction)
+pub enum OrderDirection {
+    Asc,
+    Desc,
 }
 
-impl OrderBy{
-    // valutare l'uso della libreria strum per convertire enum in stringhe (simil serde ma per sql)
-    fn to_sql(&self) -> String{
-        match self{
-            OrderBy::NAME(dir) => format!(" ORDER BY {} {}", "name", dir.to_sql()),
-            OrderBy::SURNAME(dir) => format!(" ORDER BY {} {}", "surname", dir.to_sql()),
-            OrderBy::CREATED_AT(dir) => format!(" ORDER BY {} {}", "created_at", dir.to_sql())
+impl OrderDirection {
+    fn to_sql(&self) -> &'static str {
+        match self {
+            OrderDirection::Asc => "ASC",
+            OrderDirection::Desc => "DESC",
         }
     }
 }
@@ -89,14 +88,15 @@ impl OrderBy{
 pub fn get_all_users(
     db: &SharedDb,
     search: Option<String>,
-    order_by: Option<OrderBy>,
+    order_by_field: Option<OrderByField>,
+    order_by_dir: Option<OrderDirection>,
     is_admin: Option<bool>,
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<User>> {
     let mut query = String::from("SELECT id, name, surname, email, created_at, is_admin FROM users");
 
-    let mut conditions = Vec::new();
+    let mut conditions: Vec<&str> = Vec::new();
     let mut params: Vec<Box<dyn ToSql>> = Vec::new();
 
     // 1. Search Filter
@@ -121,20 +121,15 @@ pub fn get_all_users(
         query.push_str(&conditions.join(" AND "));
     }
 
-    // 3. Enum-based ORDER BY Clause
-    let order_clause = order_by.unwrap_or(OrderBy::NAME(Direction::ASC)).to_sql();
-    query.push_str(&order_clause);
+    let field = order_by_field.unwrap_or(OrderByField::Name).column();
+    let dir = order_by_dir.unwrap_or(OrderDirection::Asc).to_sql();
+    query.push_str(&format!(" ORDER BY {field} {dir}"));
 
-    // 4. LIMIT e OFFSET Diretti
-    // limit predefinito: 10 (con un cap di sicurezza a 100 per evitare che il client scarichi tutto il DB)
     let limit_val = limit.unwrap_or(10).min(100);
-    // offset predefinito: 0
     let offset_val = offset.unwrap_or(0);
-
     query.push_str(" LIMIT ? OFFSET ?");
     params.push(Box::new(limit_val));
     params.push(Box::new(offset_val));
-
 
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(&query)?;
