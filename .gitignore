@@ -7,3 +7,5 @@ client/node_modules/
 .idea/
 server/src/database/georuggine.db
 server/src/database/georuggine.db
+
+fleet_simulation/target/

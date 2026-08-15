@@ -1,0 +1,18 @@
+[package]
+name = "fleet_simulation"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", features = ["serde"] }
+csv = "1.4.0"
+futures = "0.3.34"
+rand = "0.10.2"
+rand_distr = "0.6.0"
+reqwest = { version = "0.13.4", features = ["blocking", "json", "query"] }
+rumqttc = "0.25.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "macros"] }
+tracing = "0.1.44"
