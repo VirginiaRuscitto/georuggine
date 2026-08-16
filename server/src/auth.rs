@@ -89,17 +89,39 @@ fn authenticate(headers: &HeaderMap) -> Result<Claims, StatusCode> {
     verify_jwt(token).map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
-pub async fn jwt_auth_middleware(headers: HeaderMap, mut req: Request, next: Next) -> Result<Response, StatusCode> {
-    let claims = authenticate(&headers)?;
+pub async fn jwt_auth_middleware(headers: HeaderMap, mut req: Request, next: Next) -> Result<Response, Response> {
+    let claims = match authenticate(&headers) {
+        Ok(claims) => claims,
+        Err(_) => {
+            return Err(error_response(
+                StatusCode::UNAUTHORIZED,
+                "L'utente non ha effettuato l'accesso",
+            ));
+        }
+    };
+
     req.extensions_mut().insert(claims);
     Ok(next.run(req).await)
 }
 
-pub async fn jwt_admin_middleware(headers: HeaderMap, mut req: Request, next: Next) -> Result<Response, StatusCode> {
-    let claims = authenticate(&headers)?;
+pub async fn jwt_admin_middleware(headers: HeaderMap, mut req: Request, next: Next) -> Result<Response, Response> {
+    let claims = match authenticate(&headers) {
+        Ok(claims) => claims,
+        Err(_) => {
+            return Err(error_response(
+                StatusCode::UNAUTHORIZED,
+                "L'utente non ha effettuato l'accesso",
+            ));
+        }
+    };
+
     if !claims.is_admin {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(error_response(
+            StatusCode::FORBIDDEN,
+            "Accesso riservato agli amministratori",
+        ));
     }
+
     req.extensions_mut().insert(claims);
     Ok(next.run(req).await)
 }
