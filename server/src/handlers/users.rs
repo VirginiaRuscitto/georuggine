@@ -36,7 +36,6 @@ pub struct UsersQuery {
     pub order_by_dir: Option<OrderDirection>,
     pub search: Option<String>,
     pub is_admin: Option<bool>,
-    pub state: Option<UserState>,
     pub limit: Option<u32>,
     pub offset: Option<u32>
 }
@@ -62,7 +61,7 @@ pub async fn get_users_handler(State(state): State<AppState>, Query(params): Que
 
     let active = state.active_users.read().unwrap();
 
-    let mut result: Vec<UserStatus> = users
+    let result: Vec<UserStatus> = users
         .into_iter()
         .map(|u| UserStatus {
             id: u.id,
@@ -74,10 +73,6 @@ pub async fn get_users_handler(State(state): State<AppState>, Query(params): Que
             is_admin: u.is_admin,
         })
         .collect();
-
-    if let Some(state_filter) = params.state {
-        result.retain(|u| u.state == state_filter);
-    }
 
     Json(result).into_response()
 }
