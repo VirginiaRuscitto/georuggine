@@ -44,6 +44,10 @@ Note:
 - `movement_sessions` è una tabella derivata che raccoglie le sessioni di movimento a partire dagli eventi di cambio stato. In questo modo, per generare i report non è necessario rielaborare ogni volta l'intero `position_log`. La tabella è inoltre indicizzata su (`user_id`, `started_at`) per velocizzare la ricerca delle sessioni di uno specifico utente che si sovrappongono all'intervallo richiesto.
 - Lo stato "disconnesso" non è mai persistito: è rappresentato implicitamente dall'assenza dell'utente dalla mappa delle connessioni attive mantenuta in memoria dal server.
 
+### 1.4 Avvio dell'applicazione e dimensione dell'eseguibile
+
+TODO
+
 ## 2. Aspetti trasversali del server
 
 ### 2.1 Variabili d'ambiente
@@ -56,7 +60,7 @@ Il modulo `models.rs` definisce le principali strutture e enumerazioni utilizzat
 
 ### 2.3 Stato condiviso (state.rs)
 
-Lo stato condiviso dell'applicazione è raccolto nella struttura `AppState`, che contiene la connessione al database, il client MQTT e `ActiveUsers`, utilizzata per mantenere in memoria le informazioni sugli utenti attualmente connessi. `ActiveUsers` è definita come `Arc<RwLock<HashMap<i64, UserSession>>>`: `Arc` permette di condividere la struttura tra i diversi task asincroni, mentre `RwLock` ne consente l'accesso concorrente. La mappa utilizza l'identificativo dell'utente come chiave e associa a ciascuno una `UserSession` che contiene l'ultima posizione ricevuta, lo stato corrente e gli istanti dell'ultimo aggiornamento, dell'ultimo cambio di stato e dell'ultimo messaggio accettato. Si sottolinea che lo stato `Disconnected` non viene memorizzato nel database, ma è rappresentato dall'assenza dell'utente da `ActiveUsers`. In questo modo le informazioni necessarie alla gestione in tempo reale rimangono in memoria, mentre nel database vengono persistiti solamente i dati che devono essere conservati.
+Lo stato condiviso dell'applicazione è raccolto nella struttura `AppState`, che contiene la connessione al database, il client MQTT e `ActiveUsers`, utilizzata per mantenere in memoria le informazioni sugli utenti attualmente connessi. `ActiveUsers` è definita come `Arc<RwLock<HashMap<i64, UserSession>>>`: `Arc` permette di condividere la struttura tra i diversi task asincroni, mentre `RwLock` ne consente l'accesso concorrente. La mappa utilizza l'identificativo dell'utente come chiave e associa a ciascuno una `UserSession` che contiene l'ultima posizione ricevuta, lo stato corrente e gli istanti dell'ultimo aggiornamento, dell'ultimo cambio di stato e dell'ultimo messaggio accettato. Si sottolinea che lo stato `Disconnected` non viene memorizzato nel database, ma è rappresentato dall'assenza dell'utente da `ActiveUsers`. In questo modo le informazioni necessarie alla gestione in tempo reale rimangono in memoria, mentre nel database vengono persistiti solamente i dati che devono essere conservati. TODO dire cosa implementa che forse è importante
 
 ### 2.4 Accesso al database e DAO (cartella dao, cartella database)
 
@@ -92,8 +96,6 @@ Per la gestione delle password viene utilizzata la libreria `Argon2`, che permet
 
 La registrazione degli utenti viene gestita da `register_handler`, che permette ad un utente di creare autonomamente il proprio account, mentre `register_by_admin_handler` consente ad un amministratore di registrare un nuovo utente specificandone anche il ruolo, che può essere a sua volta amministratore o meno. Entrambi gli handler delegano la logica alla funzione `create_user`, che centralizza la validazione e la creazione dell’account. La funzione verifica il formato dell’email tramite `validator`, la presenza dei campi obbligatori e i requisiti della password (minimo 12 caratteri, di cui almeno una lettera maiuscola e almeno un carattere non alfanumerico) attraverso `validate_password`. Una violazione del vincolo di unicità sull’email viene invece gestita direttamente a livello di database e intercettata come `ConstraintViolation`: questa scelta evita di effettuare un controllo preventivo sull’esistenza dell’email, che non garantirebbe l’atomicità dell’operazione in quanto tra la verifica e il successivo inserimento potrebbero intervenire richieste concorrenti. 
 
-La promozione o la revoca del ruolo di amministratore viene gestita da `update_user_admin_handler`, che modifica il campo `is_admin`. L’eliminazione degli utenti viene invece gestita da `delete_user_handler`. In entrambi i casi, un amministratore non può modificare o eliminare il proprio account.
-
 ### 3.3 Token JWT e claims
 
 Una volta completata con successo la registrazione o il login, `generate_jwt` genera il token che verrà utilizzato dal client per autenticarsi nelle chiamate successive. Il token viene firmato tramite una chiave segreta recuperata dalla variabile d’ambiente `JWT_SECRET`; la funzione `jwt_secret` ne garantisce inoltre l’inizializzazione una sola volta tramite `OnceLock` e verifica che tale chiave sia presente e non vuota. el token vengono inseriti i `Claims`, composti dall’identificativo dell’utente (`sub`), dal relativo ruolo (`is_admin`) e dalla scadenza (`exp`), impostata a 24 ore dalla generazione. In questo modo, il JWT contiene tutte le informazioni necessarie per identificare e autorizzare l’utente nelle richieste successive, senza richiedere la gestione di una sessione lato server.
@@ -106,26 +108,69 @@ Ad ogni chiamata verso una risorsa protetta, la funzione `authenticate` recupera
 
 Il logout viene gestito lato client, eliminando il JWT memorizzato. Non è presente una blacklist server-side dei token: una volta emesso, il JWT rimane valido fino alla scadenza definita nel campo `exp`. Questa scelta mantiene l’autenticazione stateless, evitando di dover mantenere sul server lo stato delle sessioni o dei token revocati.
 
-## 4. Messaggistica (messages.rs)
+## 4. Gestione degli utenti (users.rs)
+
+Il modulo `users.rs` gestisce il recupero e le principali operazioni amministrative sugli utenti.
+
+La funzione `get_users_handler` permette agli amministratori di recuperare l'elenco degli utenti registrati, applicando criteri di ricerca, ordinamento e filtraggio per ruolo amministrativo. La funzione supporta inoltre la paginazione attraverso i parametri `limit`, che determina il numero massimo di utenti restituiti, e `offset`, che indica quanti risultati saltare. Il valore predefinito di `limit` è 10 e viene comunque limitato a un massimo di 100 utenti per richiesta. Le informazioni recuperate dal database vengono completate con lo stato corrente dell'utente. Se il suo identificativo è presente nella struttura `ActiveUsers`, viene utilizzato lo stato memorizzato nella struttura; in caso contrario, l'utente viene considerato `Disconnected`.
+
+La funzione `me_handler` permette invece a un generico utente autenticato di recuperare le proprie informazioni, utilizzando l'identificativo contenuto nei `Claims` del JWT.
+
+La promozione o la revoca del ruolo di amministratore viene gestita da `update_user_admin_handler`, che modifica il campo `is_admin`. L'eliminazione degli utenti viene invece gestita da `delete_user_handler`. In entrambi i casi, un amministratore non può modificare o eliminare il proprio account. Inoltre, dopo l'eliminazione, l'utente viene rimosso anche dalla struttura `ActiveUsers`.
+
+## 5. Posizione e movimento (handlers.rs)
+
+La gestione della posizione e la gestione dello stato di movimento sono strettamente collegate: le posizioni ricevute periodicamente dal client permettono infatti al server di determinare se un utente è fermo o in movimento e di costruire, nel tempo, le sessioni necessarie alla successiva generazione dei report.
+
+### 5.1 Ricezione e gestione della posizione
+
+La ricezione delle posizioni viene gestita da `start_mqtt_listener`, che sottoscrive il client MQTT del server al topic `georuggine/client/+/position`. Quando arriva un aggiornamento da parte dell'utente, la funzione deserializza il payload in un `PositionUpdatePayload` e delega la gestione della posizione a `handle_position_update`. 
+
+`handle_position_update` utilizza `validate_coordinates` per controllare che latitudine e longitudine siano valori finiti e rientrino nei rispettivi intervalli geografici validi. In caso di errore, la posizione viene scartata e viene inviata al client una notifica tramite MQTT. Superati i controlli, `handle_position_update` associa alla posizione l'istante corrente in UTC e la salva nella tabella `position_log` nel database. Successivamente passa la nuova `Position` a `update_session_position`, che aggiorna nella struttura `ActiveUsers` l'istante dell'ultimo segnale ricevuto dall'utente. La funzione `update_session_position` confronta inoltre la nuova posizione con quella precedentemente memorizzata: le coordinate vengono considerate cambiate se la differenza assoluta tra latitudini oppure tra longitudini supera la soglia `COORD_EPSILON`. In caso di variazione, viene aggiornato l'istante dell'ultima variazione delle coordinate.
+
+### 5.2 Gestione dello stato di movimento
+
+Sulla base del cambiamento delle coordinate rilevato da `update_session_position`, il server determina l'eventuale transizione dello stato di movimento tramite `check_state_transition`. La funzione considera due casi: se le coordinate sono cambiate, restituisce lo stato `Moving` associato all'istante corrente; se invece non sono cambiate, verifica il tempo trascorso dall'ultima variazione e quando questo raggiunge i 3 minuti definiti dalla costante `STALE_AFTER_SECS`, restituisce lo stato `Stopped`. In questo caso l'istante della transizione viene impostato a `last_coord_change_at`, cioè al momento dell'ultima variazione effettiva delle coordinate, e non all'istante in cui il server rileva il superamento dei tre minuti.
+
+Il risultato restituito da `check_state_transition` viene quindi elaborato nuovamente da `update_session_position`, che confronta l'eventuale nuovo stato determinato con quello attualmente memorizzato nella `UserSession`. Solo quando i due stati sono differenti, la funzione aggiorna lo stato della sessione e l'istante associato alla variazione, restituendo a `handle_position_update` l'eventuale cambiamento rilevato.
+
+Quando `update_session_position` restituisce una variazione dello stato, `handle_position_update` utilizza `transition_session` per chiudere la sessione precedentemente aperta e crearne una nuova con il nuovo `MovementState`, utilizzando come istante di transizione quello determinato dalla logica precedente. Le due operazioni vengono eseguite all'interno di una singola transazione, in modo da mantenere coerente la sequenza delle sessioni.
+
+La gestione dello stato di movimento non dipende però esclusivamente dalla ricezione di una nuova posizione. Per gestire il caso in cui non arrivino nuovi aggiornamenti, il server esegue in background `stale_state_watcher`, che controlla periodicamente gli utenti presenti nella struttura `ActiveUsers`. Il watcher distingue tra l'assenza di cambiamenti nelle coordinate e l'assenza completa di aggiornamenti. Se l'utente continua a inviare posizioni, ma le coordinate rimangono invariate per almeno 3 minuti, viene considerato `Stopped`; `stale_state_watcher` aggiorna quindi lo stato della relativa `UserSession` e utilizza `last_coord_change_at` come istante della variazione. Diversamente, se non viene ricevuta alcuna posizione dall'utente per almeno 2 minuti, il problema non riguarda più il movimento ma la comunicazione con il client. In questo caso l'utente viene rimosso dalla struttura `ActiveUsers` e l'eventuale sessione di movimento ancora aperta viene chiusa tramite `close_movement_session_for_user`. Non viene aperta una nuova sessione, poiché, come già scritto sopra, lo stato `Disconnected` non viene registrato nella tabella `movement_sessions`.
+
+Quando viene rilevata una variazione dello stato, sia `handle_position_update` che `stale_state_watcher` utilizzano `notify_state_change` per comunicare il nuovo stato al client tramite MQTT. La notifica contiene l'identificativo dell'utente, lo stato risultante e l'istante associato alla transizione.
+
+## 6. Reportistica (report.rs)
+
+La reportistica permette di analizzare il movimento di un utente su un intervallo temporale definito, ricostruendo il tragitto percorso e calcolandone le principali informazioni.
+
+La generazione del report viene gestita da `get_report_handler`, che riceve l'identificativo dell'utente per il quale si vuole effettuare l'analisi e il periodo da considerare. La funzione `get_start_end_from_report_period` determina quindi l'intervallo temporale corrispondente al periodo richiesto: per il giorno considera la giornata corrente, per la settimana considera la settimana corrente a partire da lunedì e per il mese considera il mese corrente. L'intervallo termina sempre all'istante in cui viene richiesto il report. Dopo aver verificato che l'utente esista, `get_report_handler` recupera le posizioni registrate per quell'utente nell'intervallo tramite `get_positions_in_range` e le sessioni di movimento e di pausa tramite `get_sessions_in_range`.
+
+A partire dalle posizioni recuperate viene ricostruito il tragitto dell'utente e viene calcolata la velocità media tramite `compute_avg_speed_kmh`. La funzione considera le coppie consecutive di posizioni e ne calcola la distanza geografica tramite `haversine_distance_km`, sommando le distanze ottenute e rapportandole alla durata complessiva del movimento. Le coppie di posizioni separate da più di 90 secondi vengono escluse dal calcolo, poiché considerate non contigue e potenzialmente riconducibili a una disconnessione. Le durate del movimento e delle pause vengono invece calcolate da `compute_durations` a partire dalle `MovementSession`, sommando separatamente la durata delle sessioni `Moving` e `Stopped` all'interno dell'intervallo richiesto.
+
+## 7. Messaggistica (messages.rs, handlers.rs)
 
 Il sistema di messaggistica gestisce l'invio e la ricezione di messaggi diretti e broadcast. HTTP viene utilizzato dall'amministratore per l'invio dei messaggi e da entrambi i client per la consultazione dello storico. MQTT viene invece utilizzato per lo scambio dei messaggi tra gli utenti e il server.
 
-### 4.1 Invio e recupero dei messaggi tramite HTTP
+### 7.1 Invio e recupero dei messaggi tramite HTTP
 
 Il modulo `messages.rs` espone le route dedicate alla messaggistica. `get_messages_handler` distingue innanzitutto il tipo di richiesta in base al ruolo dell'utente e al parametro `with`. Per un amministratore, `with` identifica l'utente con cui visualizzare la conversazione diretta; se non viene specificato, vengono invece recuperati i soli messaggi broadcast. Per un utente normale non è necessario specificare `with`, perché vengono recuperati automaticamente i messaggi diretti che lo riguardano insieme ai broadcast. Il parametro `limit` stabilisce il numero massimo di messaggi restituiti: se non viene specificato viene utilizzato il valore predefinito di 50. `clamp(1, MAX_LIMIT)` limita comunque il valore tra 1 e 200. La differenza nella gestione delle conversazioni rispecchia le esigenze delle due interfacce: . TODO chiedere a enzo il funzionamento per completare
 
 L'invio tramite HTTP è invece riservato agli amministratori: `post_direct_message` verifica l'esistenza del destinatario, salva il messaggio nel database e ne notifica la ricezione tramite MQTT, mentre `post_broadcast_handler` salva e pubblica un messaggio destinato a tutti gli utenti. Entrambe le funzioni utilizzano `validate_content` per verificare che il messaggio non sia vuoto e non superi i 1000 caratteri. I messaggi vengono quindi prima persistiti nel database e solo successivamente notificati tramite MQTT, mantenendo lo storico disponibile anche nel caso in cui la pubblicazione MQTT non vada a buon fine.
 
-### 4.2 Ricezione e invio dei messaggi tramite MQTT
+### 7.2 Ricezione e invio dei messaggi tramite MQTT
 
 I messaggi inviati dal server vengono ricevuti dagli utenti tramite topic MQTT dedicati. I messaggi diretti vengono pubblicati sul topic associato al singolo utente, mentre i broadcast utilizzano un topic comune a tutti gli utenti.
 
 Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto dal server sul canale dedicato all'utente e passato a `handle_user_message` per la gestione e il salvataggio. Prima di procedere, viene verificato che l'utente non abbia già inviato un altro messaggio nell'ultimo secondo, applicando un rate limit per evitare un invio eccessivo di messaggi, sia per limitare il carico sul server e sul database sia per ridurre il rischio di attacchi basati sull'invio massivo di richieste. Se il controllo viene superato, il messaggio viene salvato nel database associandolo all'utente come mittente. In questo modo i messaggi ricevuti tramite MQTT vengono persistiti nello stesso storico utilizzato dai messaggi inviati tramite HTTP.
 
-## N. Utilizzo della concorrenza
-
 ## N. Frontend
 
 ### N.1
 
-## N. Spiegazione di alcune scelte 
+
+## N. API
+
+### N.1 HTTP
+
+### N.2 MQTT
