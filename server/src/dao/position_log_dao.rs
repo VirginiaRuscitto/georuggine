@@ -1,7 +1,7 @@
 use crate::database::connection::SharedDb;
 use crate::models::Position;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension, Result, Row};
+use rusqlite::{params, Result, Row};
  
 fn row_to_position(row: &Row) -> Result<Position> {
     Ok(Position {

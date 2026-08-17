@@ -46,6 +46,19 @@ Note:
 
 ### 1.4 Avvio dell'applicazione e dimensione dell'eseguibile
 
+Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separatamente il backend e il frontend.
+- **Backend**
+  ```bash
+  cd server
+  cargo run
+  ```
+- **Frontend**
+  ```bash
+  cd client
+  npm install
+  npm run dev
+  ```
+
 TODO
 
 ## 2. Aspetti trasversali del server
