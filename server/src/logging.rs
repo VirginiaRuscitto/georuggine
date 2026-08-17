@@ -33,7 +33,7 @@ pub async fn cpu_logging_task() {
             Some(process) => {
                 let cpu_usage = process.cpu_usage();
                 let run_time_secs = process.run_time();
-                let memory_kb = process.memory();
+                let memory_kb = process.memory() / 1024;
                 let now = chrono::Utc::now().to_rfc3339();
                 let line = format!(
                     "{now} cpu_usage={cpu_usage:.2}% run_time={run_time_secs}s memory={memory_kb}KB\n"

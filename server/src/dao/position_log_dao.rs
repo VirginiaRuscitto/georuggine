@@ -20,17 +20,6 @@ pub fn insert_position(db: &SharedDb, user_id: i64, lat: f64, lon: f64, recorded
     Ok(conn.last_insert_rowid())
 }
 
-pub fn get_latest_position(db: &SharedDb, user_id: i64) -> Result<Option<Position>> {
-    let conn = db.lock().unwrap();
-    conn.query_row(
-        "SELECT lat, lon, recorded_at FROM position_log
-         WHERE user_id = ?1 ORDER BY recorded_at DESC LIMIT 1",
-        params![user_id],
-        row_to_position,
-    )
-    .optional()
-}
-
 pub fn get_positions_in_range(db: &SharedDb, user_id: i64, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<Position>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
