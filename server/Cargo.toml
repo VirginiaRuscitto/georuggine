@@ -22,3 +22,4 @@ sysinfo = "0.30"
 rumqttc = "0.24"
 futures = "0.3"
 validator = { version = "0.19", features = ["derive"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }

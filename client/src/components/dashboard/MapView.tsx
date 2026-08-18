@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import { Icon } from 'leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import { Icon, latLngBounds } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import GlassCard from '../ui/GlassCard';
 
@@ -16,23 +16,47 @@ const customIcon = new Icon({
   iconAnchor: [12, 41],
 });
 
-function MapUpdater({ position }: { position: [number, number] }) {
+interface TrajectoryPoint {
+  lat: number;
+  lon: number;
+  recorded_at?: string;
+}
+
+function MapUpdater({
+  position,
+  trajectory,
+}: {
+  position: [number, number];
+  trajectory: TrajectoryPoint[];
+}) {
   const map = useMap();
+
   useEffect(() => {
-    map.setView(position, 15);
-  }, [position, map]);
+    if (trajectory.length > 1) {
+      const bounds = latLngBounds(trajectory.map((p) => [p.lat, p.lon] as [number, number]));
+      bounds.extend(position);
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+    } else {
+      map.setView(position, 15);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [position[0], position[1], trajectory.length, map]);
+
   return null;
 }
 
 interface MapViewProps {
   position: { lat: number; lon: number } | null;
+  trajectory?: TrajectoryPoint[];
 }
 
-export default function MapView({ position }: MapViewProps) {
+export default function MapView({ position, trajectory = [] }: MapViewProps) {
   const defaultPos: [number, number] = [45.4642, 9.1900]; // Milano default
   const currentPos: [number, number] = position
     ? [position.lat, position.lon]
     : defaultPos;
+
+  const polylinePositions: [number, number][] = trajectory.map((p) => [p.lat, p.lon]);
 
   return (
     <GlassCard
@@ -56,6 +80,14 @@ export default function MapView({ position }: MapViewProps) {
             attribution='&copy; <a href="https://carto.com/">CARTO</a>'
             url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
           />
+
+          {polylinePositions.length > 1 && (
+            <Polyline
+              positions={polylinePositions}
+              pathOptions={{ color: '#38bdf8', weight: 4, opacity: 0.75 }}
+            />
+          )}
+
           <Marker position={currentPos} icon={customIcon}>
             <Popup className="dark-popup">
               <div className="text-neutral-900">
@@ -65,7 +97,8 @@ export default function MapView({ position }: MapViewProps) {
               </div>
             </Popup>
           </Marker>
-          <MapUpdater position={currentPos} />
+
+          <MapUpdater position={currentPos} trajectory={trajectory} />
         </MapContainer>
       </motion.div>
     </GlassCard>

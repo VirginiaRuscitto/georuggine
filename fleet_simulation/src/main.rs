@@ -6,7 +6,7 @@ use std::time::Duration;
 use reqwest::{Client, Error};
 use serde::{Deserialize, Serialize};
 use crate::mqtt::{initialize_mqtt_client, send_message, send_position};
-use crate::osrm::{Posizione, SimulatoreVeicolo};
+use crate::osrm::SimulatoreVeicolo;
 use futures::future::join_all;
 
 
@@ -52,17 +52,33 @@ struct UsersOption{
     is_admin: bool,
 }
 
+/// Client HTTP condiviso, configurato per accettare il certificato TLS
+/// self-signed locale del backend (generato con mkcert per lo sviluppo).
+///
+/// NOTA per il report: `danger_accept_invalid_certs(true)` disabilita la
+/// verifica del certificato del server. Va bene per sviluppo/demo su
+/// localhost con un certificato self-signed che reqwest non riconosce
+/// nativamente, ma NON andrebbe mai usato contro un server pubblico reale:
+/// in quel caso il certificato deve essere valido (es. Let's Encrypt) e va
+/// lasciata attiva la verifica di default.
+fn build_http_client() -> Client {
+    Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .expect("impossibile costruire il client HTTP")
+}
+
 async fn get_users(  ) -> Result< Vec<User>, Error > {
-    let client = Client::new();
+    let client = build_http_client();
 
     let credentials = ("admin@example.com","Password123!");
 
-    let token = client.post("http://127.0.0.1:3001/api/login").json(&credentials)
+    let token = client.post("https://127.0.0.1:3001/api/login").json(&credentials)
         .send().await?.json::<TokenResponse>().await?.token;
 
     let users_option = UsersOption{is_admin: false};
 
-    let users = client.get("http://127.0.0.1:3001/api/users")
+    let users = client.get("https://127.0.0.1:3001/api/users")
         .header("Authorization", format!("Bearer {}", token))
         .query(&users_option)
         .send()
@@ -75,47 +91,71 @@ async fn get_users(  ) -> Result< Vec<User>, Error > {
 
 /// Simula il movimento di un utente verso un kebab a caso: ogni 30s calcola
 /// la posizione successiva lungo il percorso reale e la pubblica via MQTT.
-/// Termina da sola quando il veicolo raggiunge la destinazione.
+/// Quando il veicolo raggiunge la destinazione, ne sceglie una nuova e
+/// ricomincia il ciclo. Termina solo se la lista kebab è vuota.
 async fn simula_movimento_utente(
     user: User,
-    origine: (f64, f64),   // (lat, lon)
-    destinazione: (f64, f64), // (lat, lon)
+    mut origine: (f64, f64),   // (lat, lon)
+    mut destinazione: (f64, f64), // (lat, lon)
     token: String,
     kebab_shops: Vec<KebabShop>
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // ottieni_percorso/SimulatoreVeicolo vogliono (lon, lat), non (lat, lon):
-    // qui invertiamo l'ordine per evitare il bug presente nella versione precedente.
-    let origine_lon_lat = (origine.1, origine.0);
-    let destinazione_lon_lat = (destinazione.1, destinazione.0);
-
-    let mut simulatore = SimulatoreVeicolo::nuovo(
-        &user.id.to_string(),
-        origine_lon_lat,
-        destinazione_lon_lat
-    ).await?;
-
-    let client_mqtt = initialize_mqtt_client(simulatore.id_veicolo(), "broker.emqx.io", 1883).await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
     loop {
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        // ottieni_percorso/SimulatoreVeicolo vogliono (lon, lat), non (lat, lon):
+        let origine_lon_lat = (origine.1, origine.0);
+        let destinazione_lon_lat = (destinazione.1, destinazione.0);
 
-        match simulatore.prossima_posizione(30.0) {
-            Some(pos) => {
-                send_position(&client_mqtt, user.id, &token, pos.lat, pos.lon ).await?;
-                println!("[{}] {:?}", simulatore.id_veicolo(), pos);
+        let mut simulatore = SimulatoreVeicolo::nuovo(
+            &user.id.to_string(),
+            origine_lon_lat,
+            destinazione_lon_lat
+        ).await?;
+
+        let client_mqtt = initialize_mqtt_client(
+            simulatore.id_veicolo(),
+            "broker.emqx.io",
+            crate::mqtt::MQTT_TLS_PORT
+        ).await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Fase di movimento
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+
+            match simulatore.prossima_posizione(30.0) {
+                Some(pos) => {
+                    send_position(&client_mqtt, user.id, &token, pos.lat, pos.lon).await?;
+                    println!("[{}] {:?}", simulatore.id_veicolo(), pos);
+                }
+                None => {
+                    send_message(&client_mqtt, user.id, &token, "destinazione raggiunta").await?;
+                    break; // esci dal loop interno e passa a scegliere nuova destinazione
+                }
             }
-            None => {
-                send_message(&client_mqtt, user.id, &token, "destinazione raggiunta").await?;
-                let mut rng = rng();
-                let kebab = kebab_shops.choose(&mut rng).unwrap();
-                simula_movimento_utente(user, destinazione_lon_lat, (kebab.lat, kebab.lon), token.clone(), kebab_shops.clone() );
-                break;
-            }
+        }
+
+        // Scegli la prossima destinazione
+        if let Some(kebab) = scegli_kebab_casuale(&kebab_shops) {
+            origine = destinazione;
+            destinazione = (kebab.lat, kebab.lon);
+            // il loop esterno ricomincia con il nuovo percorso
+        } else {
+            eprintln!(
+                "nessun kebab disponibile in kebab_shops: impossibile scegliere la prossima destinazione per user {}",
+                user.id
+            );
+            break;
         }
     }
 
     Ok(())
+}
+
+/// Sceglie un kebab a caso dalla lista, restituendo `None` invece di panicare
+/// se la lista è vuota (es. CSV mancante o senza righe).
+fn scegli_kebab_casuale(kebab_shops: &[KebabShop]) -> Option<&KebabShop> {
+    let mut rng = rng();
+    kebab_shops.choose(&mut rng)
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -142,18 +182,33 @@ fn read_csv() -> Result<Vec<KebabShop>,Box<dyn std::error::Error + Send+Sync>> {
 async fn main() -> Result<(),Box<dyn std::error::Error + Send + Sync>> {
     let kebab_shops = read_csv()?;
 
+    if kebab_shops.is_empty() {
+        return Err(format!(
+            "kebab_torino_google.csv è stato letto correttamente ma non contiene righe di dati. \
+             Verifica che il file esista nella cartella da cui lanci `cargo run` (stessa cartella di Cargo.toml) \
+             e che contenga almeno una riga oltre all'intestazione."
+        ).into());
+    }
+
     let users = get_users().await?;
+
+    if users.is_empty() {
+        return Err("nessun utente restituito da GET /api/users: crea prima degli utenti (es. con create_users.rs) prima di avviare la simulazione".into());
+    }
 
     let mut handles = Vec::new();
 
     for user in users.clone().into_iter() {
         let mut rng = rng();
-        let kebab = kebab_shops.choose(&mut rng).unwrap();
 
-        let client = Client::new();
+        // .choose() qui è sicuro perché abbiamo già verificato che kebab_shops non sia vuoto
+        let kebab = kebab_shops.choose(&mut rng)
+            .expect("kebab_shops non dovrebbe essere vuoto a questo punto, controllato sopra");
+
+        let client = build_http_client();
 
         let token = client
-            .post("http://127.0.0.1:3001/api/login")
+            .post("https://127.0.0.1:3001/api/login")
             .json(&(user.email.clone(), "Password123!"))
             .send()
             .await?
@@ -161,9 +216,16 @@ async fn main() -> Result<(),Box<dyn std::error::Error + Send + Sync>> {
             .await?
             .token;
 
-        let dest = kebab_shops.choose(&mut rng).unwrap();
+        let dest = kebab_shops.choose(&mut rng)
+            .expect("kebab_shops non dovrebbe essere vuoto a questo punto, controllato sopra");
 
-        let handle = tokio::spawn(simula_movimento_utente(user, (kebab.lat, kebab.lon), (dest.lat, dest.lon), token.clone(), kebab_shops.clone() ) );
+        let handle = tokio::spawn(simula_movimento_utente(
+            user,
+            (kebab.lat, kebab.lon),
+            (dest.lat, dest.lon),
+            token.clone(),
+            kebab_shops.clone()
+        ));
         handles.push(handle);
     }
 

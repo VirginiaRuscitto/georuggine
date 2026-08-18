@@ -10,7 +10,7 @@ struct TokenResponse {
     token: String
 }
 
-const BASE_URL: &str = "http://127.0.0.1:3001";
+const BASE_URL: &str = "https://127.0.0.1:3001";
 const PASSWORD: &str = "Password123!";
 
 const USERS: [(&str, &str); 20] = [
@@ -38,11 +38,16 @@ const USERS: [(&str, &str); 20] = [
 
 #[tokio::main]
 async fn main() -> Result<(),Box<dyn std::error::Error>>{
-    let client = Client::new();
+    // NOTA: danger_accept_invalid_certs(true) serve solo perché in locale
+    // usiamo un certificato self-signed (mkcert). Non va mai usato contro
+    // un server pubblico reale con certificato valido.
+    let client = Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
 
     let credentials = ("admin@example.com","Password123!");
 
-    let token = client.post("http://127.0.0.1:3001/api/login").json(&credentials)
+    let token = client.post(format!("{BASE_URL}/api/login")).json(&credentials)
         .send().await?.json::<TokenResponse>().await?.token;
 
     println!("{token}");

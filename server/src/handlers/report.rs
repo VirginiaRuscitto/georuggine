@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
@@ -10,7 +10,7 @@ use axum::{
 use chrono::{DateTime, Datelike, Days, NaiveDate, Utc};
 use serde::Deserialize;
 use crate::{
-    auth,
+    auth::{self, Claims},
     dao::{movement_sessions_dao, position_log_dao, users_dao},
     errors::error_response,
     models::{MovementSession, MovementState, Position, ReportPeriod, RouteReport},
@@ -18,15 +18,34 @@ use crate::{
 };
 
 #[derive(Deserialize)]
-pub struct ReportQuery { 
-    pub user_id: i64, 
-    pub period: ReportPeriod 
+pub struct ReportQuery {
+    pub user_id: i64,
+    pub period: ReportPeriod,
 }
 
-pub async fn get_report_handler(State(state): State<AppState>, Query(params): Query<ReportQuery>) -> Response {
-    let (start, end) = get_start_end_from_report_period(params.period);
+#[derive(Deserialize)]
+pub struct SelfReportQuery {
+    pub period: ReportPeriod,
+}
 
-    match users_dao::get_user_by_id(&state.db, params.user_id) {
+/// GET /api/report?user_id=&period=  (solo admin)
+pub async fn get_report_handler(State(state): State<AppState>, Query(params): Query<ReportQuery>) -> Response {
+    build_report(&state, params.user_id, params.period).await
+}
+
+/// GET /api/me/report?period=  (utente autenticato, sempre e solo sul proprio user_id)
+pub async fn get_own_report_handler(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Query(params): Query<SelfReportQuery>,
+) -> Response {
+    build_report(&state, claims.sub, params.period).await
+}
+
+async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> Response {
+    let (start, end) = get_start_end_from_report_period(period);
+
+    match users_dao::get_user_by_id(&state.db, user_id) {
         Ok(Some(_)) => {}
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
         Err(e) => {
@@ -35,7 +54,7 @@ pub async fn get_report_handler(State(state): State<AppState>, Query(params): Qu
         }
     };
 
-    let positions = match position_log_dao::get_positions_in_range(&state.db, params.user_id, start, end) {
+    let positions = match position_log_dao::get_positions_in_range(&state.db, user_id, start, end) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("errore get_positions_in_range: {e}");
@@ -43,7 +62,7 @@ pub async fn get_report_handler(State(state): State<AppState>, Query(params): Qu
         }
     };
 
-    let sessions = match movement_sessions_dao::get_sessions_in_range(&state.db, params.user_id, start, end) {
+    let sessions = match movement_sessions_dao::get_sessions_in_range(&state.db, user_id, start, end) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("errore get_sessions_in_range: {e}");
@@ -55,8 +74,8 @@ pub async fn get_report_handler(State(state): State<AppState>, Query(params): Qu
     let avg_speed_kmh = compute_avg_speed_kmh(&positions, movement_duration_secs);
 
     let report = RouteReport {
-        user_id: params.user_id,
-        period: params.period,
+        user_id,
+        period,
         trajectory: positions,
         avg_speed_kmh,
         movement_duration_secs,
@@ -153,6 +172,18 @@ pub fn compute_durations(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(admin_router())
+        .merge(self_router())
+}
+
+fn admin_router() -> Router<AppState> {
+    Router::new()
         .route("/api/report", get(get_report_handler))
         .layer(middleware::from_fn(auth::jwt_admin_middleware))
+}
+
+fn self_router() -> Router<AppState> {
+    Router::new()
+        .route("/api/me/report", get(get_own_report_handler))
+        .layer(middleware::from_fn(auth::jwt_auth_middleware))
 }
