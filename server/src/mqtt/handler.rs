@@ -53,6 +53,32 @@ fn coords_changed(old_pos: Option<&Position>, new_pos: &Position) -> bool {
     }
 }
 
+/// Garantisce che l'utente abbia una sessione attiva in memoria.
+/// Se è la prima volta che lo vediamo (posizione o messaggio) crea anche la sessione iniziale "Stopped" nel DB.
+fn ensure_active_session(active: &ActiveUsers, db: &SharedDb, user_id: i64, now: DateTime<Utc>) {
+    let is_new = {
+        let mut users = active.write().unwrap();
+        let is_new = !users.contains_key(&user_id);
+
+        users
+            .entry(user_id)
+            .or_insert_with(|| UserSession::new(now));
+
+        is_new
+    };
+
+    if is_new {
+        if let Err(e) = movement_sessions_dao::insert_movement_session(
+            db,
+            user_id,
+            MovementState::Stopped,
+            now,
+        ) {
+            tracing::error!("errore creazione sessione per user {user_id}: {e}");
+        }
+    }
+}
+
 /// Verifica la transizione di stato tra due coordinate o in base al tempo
 /// Fermo->Movimento: appena il cambio è stato rilevato
 /// Movimento->Fermo: il momento in cui le coordinate hanno smesso di cambiare, non quello in cui ce ne accorgiamo 
@@ -71,16 +97,18 @@ fn check_state_transition(
 }
 
 /// Aggiorna (o crea) la sessione attiva dell'utente con la nuova posizione,
-/// restituendo l'eventuale nuovo stato e se si tratta di una sessione nuova.
+/// restituendo l'eventuale nuovo stato 
 fn update_session_position(
     active: &ActiveUsers,
     user_id: i64,
     new_pos: Position,
     now: DateTime<Utc>,
-) -> (Option<(UserState, DateTime<Utc>)>, bool) {
+) -> Option<(UserState, DateTime<Utc>)> {
     let mut users = active.write().unwrap();
-    let is_new_session = !users.contains_key(&user_id);
-    let session = users.entry(user_id).or_insert_with(|| UserSession::new(now));
+
+    let session = users
+        .get_mut(&user_id)
+        .expect("sessione creata da ensure_active_session");
 
     session.last_seen_at = now;
 
@@ -90,16 +118,18 @@ fn update_session_position(
     }
 
     let mut transition = None;
-    if let Some((new_state, transition_at)) = check_state_transition(moved, session.last_coord_change_at, now) {
+    if let Some((new_state, transition_at)) =
+        check_state_transition(moved, session.last_coord_change_at, now)
+    {
         if session.state != new_state {
             session.state = new_state;
             session.last_change_at = transition_at;
             transition = Some((new_state, transition_at));
         }
     }
-    session.last_position = Some(new_pos);
 
-    (transition, is_new_session)
+    session.last_position = Some(new_pos);
+    transition
 }
 
 fn validate_coordinates(lat: f64, lon: f64) -> Result<(), &'static str> {
@@ -131,7 +161,12 @@ async fn handle_position_update(
     }
 
     let now = Utc::now();
-    let new_pos = Position { lat: payload.lat, lon: payload.lon, recorded_at: now };
+    ensure_active_session(active, db, user_id, now);
+    let new_pos = Position {
+        lat: payload.lat,
+        lon: payload.lon,
+        recorded_at: now,
+    };
 
     if let Err(e) = position_log_dao::insert_position(db, user_id, payload.lat, payload.lon, now) {
         tracing::error!("errore salvataggio posizione per user {user_id}: {e}");
@@ -139,19 +174,19 @@ async fn handle_position_update(
         return;
     }
 
-    let (transition, is_new_session) = update_session_position(active, user_id, new_pos, now);
-
-    if is_new_session {
-        if let Err(e) = movement_sessions_dao::insert_movement_session(db, user_id, MovementState::Stopped, now) {
-            tracing::error!("errore creazione sessione per user {user_id}: {e}");
-        }
-    }
+    let transition = update_session_position(active, user_id, new_pos, now);
 
     if let Some((new_state, transition_at)) = transition {
-        if let Err(e) = movement_sessions_dao::transition_session(db, user_id, MovementState::from(new_state), transition_at) {
+        if let Err(e) = movement_sessions_dao::transition_session(
+            db,
+            user_id,
+            MovementState::from(new_state),
+            transition_at,
+        ) {
             tracing::error!("errore transizione stato per user {user_id}: {e}");
         }
-        outbound::notify_state_change(mqtt_client, user_id, new_state, transition_at).await;
+        outbound::notify_state_change(mqtt_client, user_id, new_state, transition_at)
+        .await;
     }
 }
 
@@ -192,6 +227,7 @@ async fn handle_user_message(
     };
 
     let now = Utc::now();
+    ensure_active_session(active, db, user_id, now);
     if !check_and_update_rate_limit(active, user_id, now) {
         tracing::warn!("messaggio MQTT scartato da user {user_id}: rate limit superato");
         outbound::notify_error(mqtt_client, user_id, "Troppi messaggi in un breve intervallo, riprova tra poco").await;
@@ -247,6 +283,7 @@ pub async fn stale_state_watcher(active: ActiveUsers, db: SharedDb, mqtt_client:
             if let Err(e) = movement_sessions_dao::close_movement_session_for_user(&db, user_id, disconnected_at) {
                 tracing::error!("errore chiusura sessione per user disconnesso {}: {:?}", user_id, e);
             }
+            outbound::notify_state_change(&mqtt_client, user_id, UserState::Disconnected, disconnected_at).await;
         }
     }
 }

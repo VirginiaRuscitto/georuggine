@@ -21,14 +21,14 @@ pub fn insert_message(db: &SharedDb, sender_id: Option<i64>, recipient_id: Optio
     Ok(conn.last_insert_rowid())
 }
 
-pub fn get_broadcast_messages(db: &SharedDb, limit: i64) -> Result<Vec<Message>> {
+pub fn get_broadcast_messages(db: &SharedDb, limit: i64, offset: i64) -> Result<Vec<Message>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, sender_id, recipient_id, content, sent_at FROM messages
-         WHERE sender_id IS NULL AND recipient_id IS NULL
-         ORDER BY sent_at DESC LIMIT ?1",
+        "SELECT id, sender_id, recipient_id, content, sent_at FROM messages 
+         WHERE sender_id IS NULL AND recipient_id IS NULL 
+         ORDER BY sent_at DESC LIMIT ?1 OFFSET ?2",
     )?;
-    let rows = stmt.query_map(params![limit], row_to_message)?;
+    let rows = stmt.query_map(params![limit, offset], row_to_message)?;
     let mut messages: Vec<Message> = rows.collect::<Result<Vec<_>>>()?;
     messages.reverse();
     Ok(messages)
@@ -36,14 +36,14 @@ pub fn get_broadcast_messages(db: &SharedDb, limit: i64) -> Result<Vec<Message>>
 
 /// Solo i messaggi diretti scambiati con `user_id` (admin<->utente), senza broadcast.
 /// Usata dalla vista admin "conversazione con utente X".
-pub fn get_direct_conversation(db: &SharedDb, user_id: i64, limit: i64) -> Result<Vec<Message>> {
+pub fn get_direct_conversation(db: &SharedDb, user_id: i64, limit: i64, offset: i64) -> Result<Vec<Message>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, sender_id, recipient_id, content, sent_at FROM messages
-         WHERE sender_id = ?1 OR recipient_id = ?1
-         ORDER BY sent_at DESC LIMIT ?2",
+        "SELECT id, sender_id, recipient_id, content, sent_at FROM messages 
+         WHERE sender_id = ?1 OR recipient_id = ?1 
+         ORDER BY sent_at DESC LIMIT ?2 OFFSET ?3",
     )?;
-    let rows = stmt.query_map(params![user_id, limit], row_to_message)?;
+    let rows = stmt.query_map(params![user_id, limit, offset], row_to_message)?;
     let mut messages: Vec<Message> = rows.collect::<Result<Vec<_>>>()?;
     messages.reverse();
     Ok(messages)
@@ -51,15 +51,15 @@ pub fn get_direct_conversation(db: &SharedDb, user_id: i64, limit: i64) -> Resul
 
 /// Messaggi diretti con `user_id` UNITI ai broadcast, ordinati insieme cronologicamente.
 /// Usata dalla vista dell'utente normale, che deve vedere tutto in un'unica chiamata.
-pub fn get_conversation_with_broadcasts(db: &SharedDb, user_id: i64, limit: i64) -> Result<Vec<Message>> {
+pub fn get_conversation_with_broadcasts(db: &SharedDb, user_id: i64, limit: i64, offset: i64) -> Result<Vec<Message>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, sender_id, recipient_id, content, sent_at FROM messages
-         WHERE (sender_id = ?1 OR recipient_id = ?1)
-            OR (sender_id IS NULL AND recipient_id IS NULL)
-         ORDER BY sent_at DESC LIMIT ?2",
+        "SELECT id, sender_id, recipient_id, content, sent_at FROM messages 
+         WHERE (sender_id = ?1 OR recipient_id = ?1) 
+            OR (sender_id IS NULL AND recipient_id IS NULL) 
+         ORDER BY sent_at DESC LIMIT ?2 OFFSET ?3",
     )?;
-    let rows = stmt.query_map(params![user_id, limit], row_to_message)?;
+    let rows = stmt.query_map(params![user_id, limit, offset], row_to_message)?;
     let mut messages: Vec<Message> = rows.collect::<Result<Vec<_>>>()?;
     messages.reverse();
     Ok(messages)
