@@ -4,19 +4,19 @@
 
 ### 1.1 Panoramica del progetto
 
-Il progetto è organizzato in due parti: client e server. Il client rappresenta l'applicazione utilizzata dagli utenti e dagli amministratori, mentre il server si occupa di coordinare la comunicazione tra i client, gestire gli utenti, le posizioni, gli stati, i messaggi e la memorizzazione dei dati. Gli amministratori, pur utilizzando client distinti, operano tutti in veste di server e rappresentano quindi un'unica entità nei confronti degli utenti. La comunicazione HTTP del client web è inoltre gestita tramite CORS, che permette al client di effettuare richieste al server.
+Il progetto è organizzato in due parti: client e server. Il client rappresenta l'applicazione utilizzata dagli utenti e dagli amministratori, mentre il server si occupa di coordinare la comunicazione tra i client, gestire gli utenti, le posizioni, gli stati, i messaggi e la memorizzazione dei dati. Gli amministratori, pur utilizzando client distinti, operano tutti in veste di server e rappresentano quindi un'unica entità nei confronti degli utenti. La comunicazione HTTPS del client web è inoltre gestita tramite CORS, che permette al client di effettuare richieste al server.
 
-La comunicazione tra client e server utilizza protocolli diversi in base al tipo di operazione e di client. Le operazioni come l'autenticazione, la registrazione e la consultazione dello storico dei messaggi utilizzano HTTP REST per entrambi i client. L'amministratore utilizza HTTP per attività come la gestione degli utenti, la generazione dei report e l'invio di messaggi diretti o broadcast. Trattandosi di un client utilizzato da una postazione stabile, il modello richiesta-risposta di HTTP si adatta bene alle interazioni con il server. Il client degli utenti utilizza invece MQTT, dovendo inviare periodicamente al server la propria posizione. La scelta è legata alla natura IoT del client, che può trovarsi in presenza di una connessione meno stabile. MQTT permette di gestire questo tipo di comunicazione senza dover effettuare una nuova richiesta HTTP per ogni posizione e offrendo inoltre meccanismi di gestione e ritrasmissione dei messaggi. L'utilizzo di MQTT viene esteso anche alle altre comunicazioni del client utente, quali l'invio e la ricezione dei messaggi e la gestione delle notifiche relative ai cambiamenti di stato e agli errori. Questa scelta consente di mantenere un unico meccanismo di comunicazione, evitando di introdurre ulteriori protocolli e sfruttando un approccio coerente con la natura IoT del client.
+La comunicazione tra client e server utilizza protocolli diversi in base al tipo di operazione e di client. Le operazioni come l'autenticazione, la registrazione e la consultazione dello storico dei messaggi utilizzano HTTPS REST per entrambi i client. L'amministratore utilizza HTTPS per attività come la gestione degli utenti, la generazione dei report e l'invio di messaggi diretti o broadcast. Trattandosi di un client utilizzato da una postazione stabile, il modello richiesta-risposta di HTTPS si adatta bene alle interazioni con il server. Il client degli utenti utilizza invece MQTT, dovendo inviare periodicamente al server la propria posizione. La scelta è legata alla natura IoT del client, che può trovarsi in presenza di una connessione meno stabile. MQTT permette di gestire questo tipo di comunicazione senza dover effettuare una nuova richiesta HTTPS per ogni posizione e offrendo inoltre meccanismi di gestione e ritrasmissione dei messaggi. L'utilizzo di MQTT viene esteso anche alle altre comunicazioni del client utente, quali l'invio e la ricezione dei messaggi e la gestione delle notifiche relative ai cambiamenti di stato e agli errori. Questa scelta consente di mantenere un unico meccanismo di comunicazione, evitando di introdurre ulteriori protocolli e sfruttando un approccio coerente con la natura IoT del client.
 
 ### 1.2 Stack tecnico
 
 | Tecnologia |Utilizzo nel progetto |
 |---|---|
 | Rust | È il linguaggio richiesto dalle specifiche ed è stato utilizzato per sviluppare l'intero backend. |
-| Tokio | Runtime asincrono utilizzato per eseguire il server HTTP e coordinare le attività in background, tra cui il listener MQTT, il controllo dello stato degli utenti e il logging periodico della CPU, permettendo di gestire queste operazioni in concorrenza senza bloccare il server. |
+| Tokio | Runtime asincrono utilizzato per eseguire il server HTTPS e coordinare le attività in background, tra cui il listener MQTT, il controllo dello stato degli utenti e il logging periodico della CPU, permettendo di gestire queste operazioni in concorrenza senza bloccare il server. |
 | rusqlite | Libreria utilizzata per l'accesso al database SQLite. Sono state inoltre aggiunte le feature bundled e chrono. |
-| Axum | Framework utilizzato per sviluppare il server HTTP e gestire le API REST del backend. |
-| tower-http | Fornisce il middleware CORS, utilizzato per gestire le richieste provenienti dal frontend. |
+| Axum | Framework utilizzato per sviluppare il server HTTPS e gestire le API REST del backend. |
+| tower-HTTPS | Fornisce il middleware CORS, utilizzato per gestire le richieste provenienti dal frontend. |
 | jsonwebtoken | Generazione e verifica dei token JWT per autenticare gli utenti e proteggere le route che richiedono l'accesso autenticato o i privilegi di amministratore. |
 | serde/serde_json | Utilizzati per convertire le strutture dati Rust in JSON e viceversa, sia per i dati delle API REST sia per i messaggi MQTT. |
 | rumqttc | Gestisce la comunicazione MQTT con il broker, occupandosi della pubblicazione e della sottoscrizione ai topic utilizzati per la posizione, lo stato e la messaggistica in tempo reale. |
@@ -59,7 +59,7 @@ Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separat
   npm run dev
   ```
 
-TODO
+TODO dimensione applicazione 
 
 ## 2. Aspetti trasversali del server
 
@@ -82,19 +82,23 @@ La connessione al database è gestita nella cartella `database` dal modulo `conn
 
 Le operazioni `rusqlite` utilizzate dai DAO sono sincrone e vengono eseguite direttamente dagli handler asincroni e dai task MQTT. In caso di aumento significativo del carico, le operazioni bloccanti potrebbero essere isolate tramite `tokio::task::spawn_blocking`, evitando di occupare i worker di Tokio durante l'esecuzione delle query.
 
-### 2.5 Comunicazione HTTP e MQTT (cartella handlers, cartella mqtt)
+### 2.5 Comunicazione HTTPSS e MQTT (cartella handlers, cartella mqtt, cartella certs, tls.rs)
 
-La comunicazione HTTP è organizzata tramite route separate nei moduli della cartella `handlers`. Le route vengono poi raccolte nel `main.rs` tramite `Router::merge`. Le risorse protette utilizzano inoltre i middleware di autenticazione trattati nel capitolo sull'autenticazione. Il server HTTP è esposto sulla porta `3001` e utilizza CORS per consentire le richieste provenienti dal client.
+La comunicazione HTTPS è organizzata tramite route separate nei moduli della cartella `handlers`. Le route vengono poi raccolte nel `main.rs` tramite `Router::merge`. Le risorse protette utilizzano inoltre i middleware di autenticazione trattati nel capitolo sull'autenticazione. Il server HTTPS è esposto sulla porta `3001` e utilizza CORS per consentire le richieste provenienti dal client.
 
-La comunicazione MQTT dal server verso i client è gestita dal modulo `outbound.rs`, attraverso topic distinti per messaggi diretti, broadcast, cambiamenti di stato ed errori. La funzione `publish_json` centralizza la serializzazione dei payload in JSON e la loro pubblicazione con `QoS::AtLeastOnce`. Per la comunicazione dai client verso il server, `start_mqtt_listener`, definita in `handler.rs`, si iscrive ai topic dedicati alla posizione e ai messaggi e gestisce la ricezione e l'instradamento dei dati alle relative funzioni. Viene avviata in `main` come task asincrono in background, in modo da gestire continuamente i messaggi MQTT in parallelo al server HTTP. Prima di elaborare i dati, il server verifica il JWT tramite `is_mqtt_token_valid`, controllando che l'identificativo presente nei `Claims` corrisponda a quello dell'utente associato alla comunicazione. In questo modo un utente autenticato non può inviare dati a nome di un altro utente.
+La comunicazione MQTT dal server verso i client è gestita dal modulo `outbound.rs`, attraverso topic distinti per messaggi diretti, broadcast, cambiamenti di stato ed errori. La funzione `publish_json` centralizza la serializzazione dei payload in JSON e la loro pubblicazione con `QoS::AtLeastOnce`. Per la comunicazione dai client verso il server, `start_mqtt_listener`, definita in `handler.rs`, si iscrive ai topic dedicati alla posizione e ai messaggi e gestisce la ricezione e l'instradamento dei dati alle relative funzioni. Viene avviata in `main` come task asincrono in background, in modo da gestire continuamente i messaggi MQTT in parallelo al server HTTPS. Prima di elaborare i dati, il server verifica il JWT tramite `is_mqtt_token_valid`, controllando che l'identificativo presente nei `Claims` corrisponda a quello dell'utente associato alla comunicazione. In questo modo un utente autenticato non può inviare dati a nome di un altro utente. La connessione al broker `broker.emqx.io` viene effettuata sulla porta `8883`.
 
-Il broker utilizzato (`broker.emqx.io:1883`) non utilizza attualmente TLS né autenticazione a livello di broker. Di conseguenza, il traffico MQTT non è cifrato e può essere letto da chiunque abbia accesso al broker. Questa costituisce una limitazione nota dell'implementazione attuale.
+#### 2.5.1 Sicurezza delle comunicazioni
 
-TODO: sicurezza https e tls???
+Per proteggere le comunicazioni dell'applicazione sono stati utilizzati protocolli basati su TLS.
+
+La configurazione HTTPS è gestita dal modulo `tls.rs`, che carica il certificato del server e la relativa chiave privata dalla cartella `certs`. La configurazione TLS del server viene attivata nel `main.rs`. In ambiente di sviluppo vengono utilizzati un certificato self-signed e la relativa chiave, generati tramite `mkcert`; ciò permette di utilizzare HTTPS anche localmente, tuttavia il browser può mostrare un avviso relativo all'attendibilità del certificato. Per un eventuale deployment pubblico è sufficiente sostituire questi certificati con quelli emessi da una Certificate Authority riconosciuta.
+
+Per MQTT viene invece utilizzato il certificato CA del broker, salvato sempre nella cartella `certs`, che permette al backend di verificarne l'identità durante la connessione TLS.
 
 ### 2.6 Gestione degli errori e logging (error.rs, logging.rs)
 
-Per la gestione degli errori viene utilizzato `anyhow` esclusivamente nel punto di ingresso dell'applicazione, nella funzione `main()`, in modo da gestire errori di tipo diverso. Negli altri livelli dell'applicazione, le funzioni che possono fallire restituiscono un `Result`. Gli errori comunicati dalle API vengono gestiti tramite `ErrorPayload`, che contiene il messaggio nel campo `error` ed è definito nel modulo `errors.rs`. In HTTP viene restituito insieme allo `StatusCode` appropriato, mentre in MQTT viene inviato sul topic dedicato agli errori dell'utente.
+Per la gestione degli errori viene utilizzato `anyhow` esclusivamente nel punto di ingresso dell'applicazione, nella funzione `main()`, in modo da gestire errori di tipo diverso. Negli altri livelli dell'applicazione, le funzioni che possono fallire restituiscono un `Result`. Gli errori comunicati dalle API vengono gestiti tramite `ErrorPayload`, che contiene il messaggio nel campo `error` ed è definito nel modulo `errors.rs`. In HTTPS viene restituito insieme allo `StatusCode` appropriato, mentre in MQTT viene inviato sul topic dedicato agli errori dell'utente.
 
 Il sistema di logging è centralizzato nel modulo `logging.rs` e viene inizializzato in `main.rs` all'avvio del server tramite `tracing` e `tracing-subscriber`. Il livello di dettaglio può essere configurato tramite `RUST_LOG`, con `info` utilizzato come valore predefinito. Il logging viene utilizzato sia per segnalare eventi ed errori durante l'esecuzione, sia per monitorare il processo: un task in background registra ogni due minuti l'utilizzo della CPU, il tempo di esecuzione e la memoria occupata dal processo nel file `cpu_usage.log`. Anche eventuali `panic` nei task in background vengono intercettati e registrati.
 
@@ -116,7 +120,7 @@ Una volta completata con successo la registrazione o il login, `generate_jwt` ge
 
 ### 3.4 Autenticazione e autorizzazione tramite middleware
 
-Ad ogni chiamata verso una risorsa protetta, la funzione `authenticate` recupera il token dall’header HTTP `Authorization`, verificando che sia presente nel formato `Bearer <token>`. Il token viene successivamente verificato tramite `verify_jwt`, che utilizza la stessa chiave segreta impiegata durante la generazione e, tramite `Validation::default()`, controlla la validità del token e la relativa scadenza. Questa logica viene utilizzata dai middleware `jwt_auth_middleware` e `jwt_admin_middleware`. Il primo verifica esclusivamente l’autenticazione dell’utente, mentre il secondo controlla anche il valore `is_admin` presente nei `Claims`. La presenza del ruolo direttamente nel token evita quindi di interrogare il database ad ogni chiamata per verificare i privilegi, rendendo il controllo più rapido; il compromesso è che una modifica dei privilegi non invalida automaticamente i token già emessi, che rimangono validi fino alla loro scadenza. Una volta superato il controllo, i `Claims` vengono inseriti nelle `extensions` della `Request` e possono essere recuperati dagli handler tramite `Extension<Claims>`. In questo modo, ad esempio, `me_handler` accede a `claims.sub` per ottenere l’identificativo dell’utente e utilizzarlo nella ricerca sul database, senza dover nuovamente estrarre e verificare il token.
+Ad ogni chiamata verso una risorsa protetta, la funzione `authenticate` recupera il token dall’header HTTPS `Authorization`, verificando che sia presente nel formato `Bearer <token>`. Il token viene successivamente verificato tramite `verify_jwt`, che utilizza la stessa chiave segreta impiegata durante la generazione e, tramite `Validation::default()`, controlla la validità del token e la relativa scadenza. Questa logica viene utilizzata dai middleware `jwt_auth_middleware` e `jwt_admin_middleware`. Il primo verifica esclusivamente l’autenticazione dell’utente, mentre il secondo controlla anche il valore `is_admin` presente nei `Claims`. La presenza del ruolo direttamente nel token evita quindi di interrogare il database ad ogni chiamata per verificare i privilegi, rendendo il controllo più rapido; il compromesso è che una modifica dei privilegi non invalida automaticamente i token già emessi, che rimangono validi fino alla loro scadenza. Una volta superato il controllo, i `Claims` vengono inseriti nelle `extensions` della `Request` e possono essere recuperati dagli handler tramite `Extension<Claims>`. In questo modo, ad esempio, `me_handler` accede a `claims.sub` per ottenere l’identificativo dell’utente e utilizzarlo nella ricerca sul database, senza dover nuovamente estrarre e verificare il token.
 
 ### 3.5 Logout e gestione dello stato
 
@@ -164,19 +168,19 @@ A partire dalle posizioni recuperate viene ricostruito il tragitto dell'utente e
 
 ## 7. Messaggistica (handlers/messages.rs, mqtt/handlers.rs)
 
-Il sistema di messaggistica gestisce l'invio e la ricezione di messaggi diretti e broadcast. HTTP viene utilizzato dall'amministratore per l'invio dei messaggi e da entrambi i client per la consultazione dello storico. MQTT viene invece utilizzato per lo scambio dei messaggi tra gli utenti e il server.
+Il sistema di messaggistica gestisce l'invio e la ricezione di messaggi diretti e broadcast. HTTPS viene utilizzato dall'amministratore per l'invio dei messaggi e da entrambi i client per la consultazione dello storico. MQTT viene invece utilizzato per lo scambio dei messaggi tra gli utenti e il server.
 
-### 7.1 Invio e recupero dei messaggi tramite HTTP
+### 7.1 Invio e recupero dei messaggi tramite HTTPS
 
 Il modulo `messages.rs` espone le route dedicate alla messaggistica. `get_messages_handler` distingue innanzitutto il tipo di richiesta in base al ruolo dell'utente e al parametro `with`. Per un amministratore, `with` identifica l'utente con cui visualizzare la conversazione diretta; se non viene specificato, vengono invece recuperati i soli messaggi broadcast. Per un utente normale non è necessario specificare `with`, perché vengono recuperati automaticamente i messaggi diretti che lo riguardano insieme ai broadcast. Il parametro `limit` stabilisce il numero massimo di messaggi restituiti: se non viene specificato viene utilizzato il valore predefinito di 50. `clamp(1, MAX_LIMIT)` limita comunque il valore tra 1 e 200. La differenza nella gestione delle conversazioni rispecchia le esigenze delle due interfacce: . TODO chiedere a enzo il funzionamento per completare
 
-L'invio tramite HTTP è invece riservato agli amministratori: `post_direct_message` verifica l'esistenza del destinatario, salva il messaggio nel database e ne notifica la ricezione tramite MQTT, mentre `post_broadcast_handler` salva e pubblica un messaggio destinato a tutti gli utenti. Entrambe le funzioni utilizzano `validate_content` per verificare che il messaggio non sia vuoto e non superi i 1000 caratteri. I messaggi vengono quindi prima persistiti nel database e solo successivamente notificati tramite MQTT, mantenendo lo storico disponibile anche nel caso in cui la pubblicazione MQTT non vada a buon fine.
+L'invio tramite HTTPS è invece riservato agli amministratori: `post_direct_message` verifica l'esistenza del destinatario, salva il messaggio nel database e ne notifica la ricezione tramite MQTT, mentre `post_broadcast_handler` salva e pubblica un messaggio destinato a tutti gli utenti. Entrambe le funzioni utilizzano `validate_content` per verificare che il messaggio non sia vuoto e non superi i 1000 caratteri. I messaggi vengono quindi prima persistiti nel database e solo successivamente notificati tramite MQTT, mantenendo lo storico disponibile anche nel caso in cui la pubblicazione MQTT non vada a buon fine.
 
 ### 7.2 Ricezione e invio dei messaggi tramite MQTT
 
 I messaggi inviati dal server vengono ricevuti dagli utenti tramite topic MQTT dedicati. I messaggi diretti vengono pubblicati sul topic associato al singolo utente, mentre i broadcast utilizzano un topic comune a tutti gli utenti.
 
-Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto dal server sul canale dedicato all'utente e passato a `handle_user_message` per la gestione e il salvataggio. Prima di procedere, viene verificato che l'utente non abbia già inviato un altro messaggio nell'ultimo secondo, applicando un rate limit per evitare un invio eccessivo di messaggi, sia per limitare il carico sul server e sul database sia per ridurre il rischio di attacchi basati sull'invio massivo di richieste. Se il controllo viene superato, il messaggio viene salvato nel database associandolo all'utente come mittente. In questo modo i messaggi ricevuti tramite MQTT vengono persistiti nello stesso storico utilizzato dai messaggi inviati tramite HTTP. Si sottolinea che anche la ricezione di un messaggio costituisce un segnale di vita dell'utente e aggiorna quindi `last_seen_at`; in questo modo si evita di considerare l'utente come disconnesso finché continuano ad arrivare messaggi.
+Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto dal server sul canale dedicato all'utente e passato a `handle_user_message` per la gestione e il salvataggio. Prima di procedere, viene verificato che l'utente non abbia già inviato un altro messaggio nell'ultimo secondo, applicando un rate limit per evitare un invio eccessivo di messaggi, sia per limitare il carico sul server e sul database sia per ridurre il rischio di attacchi basati sull'invio massivo di richieste. Se il controllo viene superato, il messaggio viene salvato nel database associandolo all'utente come mittente. In questo modo i messaggi ricevuti tramite MQTT vengono persistiti nello stesso storico utilizzato dai messaggi inviati tramite HTTPS. Si sottolinea che anche la ricezione di un messaggio costituisce un segnale di vita dell'utente e aggiorna quindi `last_seen_at`; in questo modo si evita di considerare l'utente come disconnesso finché continuano ad arrivare messaggi.
 
 ## N. Frontend
 
@@ -185,7 +189,7 @@ Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto d
 
 ## N. API
 
-### N.1 HTTP
+### N.1 HTTPS
 
 - **POST `/api/register`**
   - Request body:
@@ -463,3 +467,7 @@ Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto d
       "error": "Coordinate non valide"
     }
     ```
+
+## N. Demo
+
+TODO
