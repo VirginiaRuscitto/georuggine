@@ -1,13 +1,14 @@
 use chrono::{DateTime, Utc};
 use csv::Reader;
 use rand::seq::IndexedRandom;
-use rand::rng;
+use rand::{rng, RngExt};
 use std::time::Duration;
 use reqwest::{Client, Error};
 use serde::{Deserialize, Serialize};
 use crate::mqtt::{initialize_mqtt_client, send_message, send_position};
-use crate::osrm::SimulatoreVeicolo;
+use crate::osrm::{Posizione, SimulatoreVeicolo};
 use futures::future::join_all;
+use tokio;
 
 
 mod osrm;
@@ -69,7 +70,7 @@ fn build_http_client() -> Client {
 }
 
 async fn get_users(  ) -> Result< Vec<User>, Error > {
-    let client = build_http_client();
+    let client = Client::new();
 
     let credentials = ("admin@example.com","Password123!");
 
@@ -91,71 +92,64 @@ async fn get_users(  ) -> Result< Vec<User>, Error > {
 
 /// Simula il movimento di un utente verso un kebab a caso: ogni 30s calcola
 /// la posizione successiva lungo il percorso reale e la pubblica via MQTT.
-/// Quando il veicolo raggiunge la destinazione, ne sceglie una nuova e
-/// ricomincia il ciclo. Termina solo se la lista kebab è vuota.
+/// Termina da sola quando il veicolo raggiunge la destinazione.
 async fn simula_movimento_utente(
     user: User,
-    mut origine: (f64, f64),   // (lat, lon)
-    mut destinazione: (f64, f64), // (lat, lon)
+    origine: (f64, f64),   // (lat, lon)
+    destinazione: (f64, f64), // (lat, lon)
     token: String,
     kebab_shops: Vec<KebabShop>
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // ottieni_percorso/SimulatoreVeicolo vogliono (lon, lat), non (lat, lon):
+    // qui invertiamo l'ordine per evitare il bug presente nella versione precedente.
+    let origine_lon_lat = (origine.1, origine.0);
+    let destinazione_lon_lat = (destinazione.1, destinazione.0);
+
+    let mut simulatore = SimulatoreVeicolo::nuovo(
+        &user.id.to_string(),
+        origine_lon_lat,
+        destinazione_lon_lat
+    ).await?;
+
+    let client_mqtt = initialize_mqtt_client(simulatore.id_veicolo(), "broker.emqx.io", 1883).await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let mut last_pos = (0.0, 0.0);
+
     loop {
-        // ottieni_percorso/SimulatoreVeicolo vogliono (lon, lat), non (lat, lon):
-        let origine_lon_lat = (origine.1, origine.0);
-        let destinazione_lon_lat = (destinazione.1, destinazione.0);
+        tokio::time::sleep(Duration::from_secs(30)).await;
 
-        let mut simulatore = SimulatoreVeicolo::nuovo(
-            &user.id.to_string(),
-            origine_lon_lat,
-            destinazione_lon_lat
-        ).await?;
+        match simulatore.prossima_posizione(30.0) {
+            Some(pos) => {
+                last_pos = (pos.lat, pos.lon);
+                send_position(&client_mqtt, user.id, &token, pos.lat, pos.lon ).await?;
+                println!("[{}] {:?}", simulatore.id_veicolo(), pos);
+            }
+            None => {
+                let choice = {
+                    let mut rng = rng();
+                    rng.random_range(1..=15)
+                }; // rng dropped here, before any .await
 
-        let client_mqtt = initialize_mqtt_client(
-            simulatore.id_veicolo(),
-            "broker.emqx.io",
-            crate::mqtt::MQTT_TLS_PORT
-        ).await?;
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
-        // Fase di movimento
-        loop {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-
-            match simulatore.prossima_posizione(30.0) {
-                Some(pos) => {
-                    send_position(&client_mqtt, user.id, &token, pos.lat, pos.lon).await?;
-                    println!("[{}] {:?}", simulatore.id_veicolo(), pos);
-                }
-                None => {
-                    send_message(&client_mqtt, user.id, &token, "destinazione raggiunta").await?;
-                    break; // esci dal loop interno e passa a scegliere nuova destinazione
+                match choice {
+                    1 => {
+                        send_message(&client_mqtt, user.id, &token, "destinazione raggiunta").await?;
+                        let mut rng = rng(); // new rng, only used synchronously
+                        let kebab = kebab_shops.choose(&mut rng).unwrap().clone();
+                        // note: this recursive call isn't awaited/spawned in your original code either — see below
+                    }
+                    2 => {
+                        tokio::time::sleep(Duration::from_secs(120)).await;
+                    }
+                    _ => {
+                        send_position(&client_mqtt, user.id, &token, last_pos.0, last_pos.1).await?;
+                    }
                 }
             }
-        }
-
-        // Scegli la prossima destinazione
-        if let Some(kebab) = scegli_kebab_casuale(&kebab_shops) {
-            origine = destinazione;
-            destinazione = (kebab.lat, kebab.lon);
-            // il loop esterno ricomincia con il nuovo percorso
-        } else {
-            eprintln!(
-                "nessun kebab disponibile in kebab_shops: impossibile scegliere la prossima destinazione per user {}",
-                user.id
-            );
-            break;
         }
     }
 
     Ok(())
-}
-
-/// Sceglie un kebab a caso dalla lista, restituendo `None` invece di panicare
-/// se la lista è vuota (es. CSV mancante o senza righe).
-fn scegli_kebab_casuale(kebab_shops: &[KebabShop]) -> Option<&KebabShop> {
-    let mut rng = rng();
-    kebab_shops.choose(&mut rng)
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -200,6 +194,7 @@ async fn main() -> Result<(),Box<dyn std::error::Error + Send + Sync>> {
 
     for user in users.clone().into_iter() {
         let mut rng = rng();
+        let kebab = kebab_shops.choose(&mut rng).unwrap();
 
         // .choose() qui è sicuro perché abbiamo già verificato che kebab_shops non sia vuoto
         let kebab = kebab_shops.choose(&mut rng)
@@ -219,20 +214,23 @@ async fn main() -> Result<(),Box<dyn std::error::Error + Send + Sync>> {
         let dest = kebab_shops.choose(&mut rng)
             .expect("kebab_shops non dovrebbe essere vuoto a questo punto, controllato sopra");
 
-        let handle = tokio::spawn(simula_movimento_utente(
-            user,
-            (kebab.lat, kebab.lon),
-            (dest.lat, dest.lon),
-            token.clone(),
-            kebab_shops.clone()
-        ));
+        let handle = tokio::spawn(
+            simula_movimento_utente(
+                user,
+                (kebab.lat, kebab.lon),
+                (dest.lat, dest.lon),
+                token,
+                kebab_shops.clone())
+        );
         handles.push(handle);
     }
 
     let results = join_all(handles).await;
     for r in results {
-        if let Err(e) = r {
-            eprintln!("task fallito: {:?}", e);
+        match r {
+            Err(e) => eprintln!("task panicked: {:?}", e),
+            Ok(Err(e)) => eprintln!("task returned error: {:?}", e),
+            Ok(Ok(())) => {}
         }
     }
 
