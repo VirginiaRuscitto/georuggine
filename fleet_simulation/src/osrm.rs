@@ -79,7 +79,7 @@ struct Segmento {
 /// per il campionamento (con lunghezza e durata già calcolate).
 async fn ottieni_percorso(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> Result<Vec<Segmento>> {
     let url = format!(
-        "https://router.project-osrm.org/route/v1/driving/{},{};{},{}\
+        "http://localhost:5000/route/v1/driving/{},{};{},{}\
          ?overview=full&geometries=geojson&annotations=speed",
         lon1, lat1, lon2, lat2
     );

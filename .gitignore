@@ -9,3 +9,5 @@ server/src/database/georuggine.db
 server/src/database/georuggine.db
 
 fleet_simulation/target/
+
+fleet_simulation/osrm-data/data/
