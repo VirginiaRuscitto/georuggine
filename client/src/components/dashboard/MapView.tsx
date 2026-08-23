@@ -52,7 +52,8 @@ interface MapViewProps {
 
 export default function MapView({ position, trajectory = [] }: MapViewProps) {
   const defaultPos: [number, number] = [45.4642, 9.1900]; // Milano default
-  const currentPos: [number, number] = position
+  const hasPosition = position !== null;
+  const currentPos: [number, number] = hasPosition
     ? [position.lat, position.lon]
     : defaultPos;
 
@@ -88,15 +89,17 @@ export default function MapView({ position, trajectory = [] }: MapViewProps) {
             />
           )}
 
-          <Marker position={currentPos} icon={customIcon}>
-            <Popup className="dark-popup">
-              <div className="text-neutral-900">
-                <p className="font-semibold">La tua posizione</p>
-                <p className="text-xs">Lat: {currentPos[0].toFixed(6)}</p>
-                <p className="text-xs">Lon: {currentPos[1].toFixed(6)}</p>
-              </div>
-            </Popup>
-          </Marker>
+          {hasPosition && (
+            <Marker position={currentPos} icon={customIcon}>
+              <Popup className="dark-popup">
+                <div className="text-neutral-900">
+                  <p className="font-semibold">La tua posizione</p>
+                  <p className="text-xs">Lat: {currentPos[0].toFixed(6)}</p>
+                  <p className="text-xs">Lon: {currentPos[1].toFixed(6)}</p>
+                </div>
+              </Popup>
+            </Marker>
+          )}
 
           <MapUpdater position={currentPos} trajectory={trajectory} />
         </MapContainer>

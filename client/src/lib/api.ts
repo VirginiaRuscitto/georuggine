@@ -9,6 +9,11 @@ export const api = axios.create({
   },
 });
 
+// Evento globale per errori
+export function showError(message: string) {
+  window.dispatchEvent(new CustomEvent('app-error', { detail: message }));
+}
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
   if (token) {
@@ -23,6 +28,9 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('token');
       window.location.href = '/login';
+    } else {
+      const msg = error.response?.data?.error || error.message || 'Errore di connessione';
+      showError(msg);
     }
     return Promise.reject(error);
   }

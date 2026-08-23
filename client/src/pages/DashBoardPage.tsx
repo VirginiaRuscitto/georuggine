@@ -22,6 +22,7 @@ const POLL_INTERVAL_MS = 30_000; // stesso intervallo con cui i dispositivi invi
 
 export default function DashboardPage() {
   const [user, setUser] = useState<User | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [trajectory, setTrajectory] = useState<TrajectoryPoint[]>([]);
   const [position, setPosition] = useState<{ lat: number; lon: number } | null>(null);
   const [state, setState] = useState<'disconnected' | 'stopped' | 'moving'>('disconnected');
@@ -45,6 +46,7 @@ export default function DashboardPage() {
       if (points.length > 0) {
         const last = points[points.length - 1];
         setPosition({ lat: last.lat, lon: last.lon });
+        setLastUpdate(last.recorded_at);
       }
     } catch (e: any) {
       console.error('Errore fetch tragitto:', e.response?.status, e.response?.data || e.message);
@@ -99,7 +101,7 @@ export default function DashboardPage() {
           </div>
         ) : (
           <>
-            <UserSidebar user={user} position={position} state={state} />
+            <UserSidebar user={user} position={position} state={state} lastUpdate={lastUpdate} />
             <MapView position={position} trajectory={trajectory} />
           </>
         )}

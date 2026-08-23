@@ -77,9 +77,21 @@ export default function ChatWindow({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+    const [userScrolled, setUserScrolled] = useState(false);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (!userScrolled) {
+      scrollToBottom();
+    }
+  }, [messages, userScrolled]);
+
+  const handleScroll = () => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
+    setUserScrolled(!isNearBottom);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -125,7 +137,7 @@ export default function ChatWindow({
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3" onScroll={handleScroll} ref={messagesContainerRef}>
           <AnimatePresence initial={false}>
             {items.map((item) =>
               item.type === 'separator' ? (

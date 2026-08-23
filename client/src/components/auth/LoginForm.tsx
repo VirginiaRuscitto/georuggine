@@ -60,18 +60,12 @@ export default function LoginForm() {
       />
 
       <motion.div
-        className="flex items-center justify-between text-xs"
+        className="flex items-center justify-center text-xs"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
       >
-        <label className="flex items-center gap-2 cursor-pointer text-muted hover:text-foreground transition-colors">
-          <input type="checkbox" className="rounded bg-input border-border" />
-          <span>Ricordami</span>
-        </label>
-        <a href="#" className="text-accent hover:text-accent-hover transition-colors">
-          Password dimenticata?
-        </a>
+        <span className="text-muted">Inserisci le tue credenziali per accedere</span>
       </motion.div>
 
       {error && (

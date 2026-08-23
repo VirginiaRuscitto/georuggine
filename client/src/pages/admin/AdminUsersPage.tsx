@@ -20,6 +20,8 @@ import { useAuth } from '../../context/AuthContext';
 interface UserItem {
   id: number;
   username: string;
+  name?: string;
+  surname?: string;
   state: string;
   is_admin: boolean;
 }
@@ -48,7 +50,7 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [adminFilter, setAdminFilter] = useState<'all' | 'admin' | 'non-admin'>('all');
-  const [stateFilter, setStateFilter] = useState<'all' | 'moving' | 'stopped' | 'disconnected'>('all');
+  const [stateFilter, setStateFilter] = useState<'all' | 'moving' | 'stopped'>('all');
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<NewUserForm>(EMPTY_FORM);
   const [formError, setFormError] = useState('');
@@ -74,13 +76,8 @@ export default function AdminUsersPage() {
     try {
       const res = await api.get('/api/users', {
         params: {
-          order_by: { "Name": 'asc' }, 
-          search: search || undefined,
-          is_admin: adminFilter !== 'all' ? adminFilter === 'admin' : undefined,
-          state: stateFilter !== 'all' ? stateFilter : undefined,
-          // numero di utenti da recuperare, se null ne recupera 100
+          order_by: { "Name": 'asc' },
           limit: null,
-          // offset per la paginazione, se null parte dall'inizio
           offset: null,
         },
       });
@@ -95,7 +92,8 @@ export default function AdminUsersPage() {
   const filteredUsers = useMemo(() => {
     const term = search.toLowerCase();
     return users.filter((u) => {
-      if (term && !(u.username?.toLowerCase() || '').includes(term)) return false;
+      const displayName = `${u.name ?? ''} ${u.surname ?? ''} ${u.username ?? ''}`.toLowerCase();
+      if (term && !displayName.includes(term)) return false;
       if (adminFilter === 'admin' && !u.is_admin) return false;
       if (adminFilter === 'non-admin' && u.is_admin) return false;
       if (stateFilter !== 'all' && u.state !== stateFilter) return false;
@@ -108,7 +106,6 @@ export default function AdminUsersPage() {
       alert('Non puoi modificare il tuo stesso account');
       return;
     }
-    // Aggiornamento ottimistico
     const previousValue = u.is_admin;
     setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_admin: !x.is_admin } : x)));
     try {
@@ -120,7 +117,6 @@ export default function AdminUsersPage() {
         data: e.response?.data,
         message: e.message,
       });
-      // Rollback
       setUsers((prev) =>
         prev.map((x) => (x.id === u.id ? { ...x, is_admin: previousValue } : x))
       );
@@ -144,7 +140,7 @@ export default function AdminUsersPage() {
     } catch (e: any) {
       console.error('Errore delete user:', e.response?.data || e.message);
       setUsers(previous);
-      alert(e.response?.data?.error || 'Impossibile eliminare l\'utente');
+      alert(e.response?.data?.error || "Impossibile eliminare l'utente");
     }
   };
 
@@ -257,7 +253,7 @@ export default function AdminUsersPage() {
                   onChange={(e) => setForm({ ...form, isAdmin: e.target.checked })}
                   className="w-4 h-4 rounded border-white/20 bg-white/5 cursor-pointer accent-white"
                 />
-                <span>IsAdmin?</span>
+                <span>è un admin</span>
               </label>
 
               <AnimatePresence>
@@ -341,10 +337,10 @@ export default function AdminUsersPage() {
                 <AnimatePresence>
                   {showFilters && (
                     <motion.div
-                      className="absolute right-0 top-full mt-2 w-64 glass-card glass-card-subtle !p-4 z-20"
-                      initial={{ opacity: 0, y: -8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -8 }}
+                      className="absolute right-0 top-full mt-2 w-64 bg-[#1a1a2e] border border-white/10 rounded-xl p-4 z-[9999] shadow-2xl"
+                      initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -8, scale: 0.95 }}
                       transition={{ duration: 0.15 }}
                     >
                       <div className="mb-3">
@@ -384,11 +380,6 @@ export default function AdminUsersPage() {
                             label="Stopped"
                             checked={stateFilter === 'stopped'}
                             onChange={() => setStateFilter('stopped')}
-                          />
-                          <FilterOption
-                            label="Disconnected"
-                            checked={stateFilter === 'disconnected'}
-                            onChange={() => setStateFilter('disconnected')}
                           />
                         </div>
                       </div>
@@ -518,11 +509,17 @@ function UserRow({
 
       {/* Nome + badge admin */}
       <div className="min-w-0 flex items-center gap-2">
-        <p className="text-sm font-medium truncate">{user.username}</p>
-        {user.is_admin && (
+        <p className="text-sm font-medium truncate">
+          {user.name && user.surname ? `${user.name} ${user.surname}` : user.username}
+        </p>
+        {user.is_admin ? (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-semibold uppercase tracking-wide flex-shrink-0">
             <Shield size={10} />
             Admin
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white/5 border border-white/10 text-neutral-400 text-[10px] font-semibold uppercase tracking-wide flex-shrink-0">
+            Utente
           </span>
         )}
         {isSelf && <span className="text-[10px] text-muted flex-shrink-0">(tu)</span>}

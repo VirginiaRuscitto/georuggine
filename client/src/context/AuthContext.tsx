@@ -37,6 +37,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUserId(payload.user_id ?? payload.id ?? payload.sub ?? null);
         setToken(stored);
         setIsAuthenticated(true);
+        
+        // Redirect admin se necessario
+        if (payload.is_admin && window.location.pathname === '/') {
+          window.location.href = '/admin';
+        }
       } else {
         localStorage.removeItem('token');
       }

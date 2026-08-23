@@ -7,9 +7,10 @@ interface UserSidebarProps {
   user: UserType | null;
   position: { lat: number; lon: number } | null;
   state: 'disconnected' | 'stopped' | 'moving';
+  lastUpdate?: string | null; // ISO string dell'ultimo messaggio/posizione
 }
 
-export default function UserSidebar({ user, position, state }: UserSidebarProps) {
+export default function UserSidebar({ user, position, state, lastUpdate }: UserSidebarProps) {
   const stateConfig = {
     disconnected: { color: 'text-neutral-500', bg: 'bg-neutral-500/10', label: 'Offline' },
     stopped: { color: 'text-amber-400', bg: 'bg-amber-400/10', label: 'Fermo' },
@@ -17,6 +18,10 @@ export default function UserSidebar({ user, position, state }: UserSidebarProps)
   };
 
   const config = stateConfig[state];
+
+  // Se offline: non mostrare ultimo aggiornamento, mappa vuota
+  // Se stopped/moving: mostrare ultimo aggiornamento (ultimo messaggio o posizione)
+  const showLastUpdate = state !== 'disconnected' && lastUpdate;
 
   return (
     <GlassCard
@@ -54,42 +59,53 @@ export default function UserSidebar({ user, position, state }: UserSidebarProps)
             <Activity size={20} className={config.color} />
             <div>
               <p className={`font-medium ${config.color}`}>{config.label}</p>
-              <p className="text-xs text-muted mt-0.5">Aggiornato ora</p>
+              {state !== 'disconnected' && (
+                <p className="text-xs text-muted mt-0.5">Aggiornato ora</p>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Posizione */}
-        <div className="mb-6">
-          <h3 className="text-xs uppercase tracking-wider text-muted mb-3">
-            Posizione
-          </h3>
-          <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 space-y-3">
-            <div className="flex items-center gap-3">
-              <Navigation size={16} className="text-neutral-400" />
-              <div>
-                <p className="text-xs text-muted">Latitudine</p>
-                <p className="font-mono text-sm">{position?.lat.toFixed(6) ?? '--'}</p>
+        {/* Posizione - solo se non offline */}
+        {state !== 'disconnected' && position && (
+          <div className="mb-6">
+            <h3 className="text-xs uppercase tracking-wider text-muted mb-3">
+              Posizione
+            </h3>
+            <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 space-y-3">
+              <div className="flex items-center gap-3">
+                <Navigation size={16} className="text-neutral-400" />
+                <div>
+                  <p className="text-xs text-muted">Latitudine</p>
+                  <p className="font-mono text-sm">{position?.lat.toFixed(6) ?? '--'}</p>
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Navigation size={16} className="text-neutral-400 rotate-90" />
-              <div>
-                <p className="text-xs text-muted">Longitudine</p>
-                <p className="font-mono text-sm">{position?.lon.toFixed(6) ?? '--'}</p>
+              <div className="flex items-center gap-3">
+                <Navigation size={16} className="text-neutral-400 rotate-90" />
+                <div>
+                  <p className="text-xs text-muted">Longitudine</p>
+                  <p className="font-mono text-sm">{position?.lon.toFixed(6) ?? '--'}</p>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Ultimo aggiornamento */}
+        {/* Ultimo aggiornamento - solo se non offline */}
         <div className="mt-auto">
-          <div className="flex items-center gap-2 text-xs text-muted">
-            <Clock size={14} />
-            <span>
-              Ultimo aggiornamento: {new Date().toLocaleTimeString('it-IT')}
-            </span>
-          </div>
+          {showLastUpdate ? (
+            <div className="flex items-center gap-2 text-xs text-muted">
+              <Clock size={14} />
+              <span>
+                Ultimo aggiornamento: {new Date(lastUpdate).toLocaleTimeString('it-IT')}
+              </span>
+            </div>
+          ) : state === 'disconnected' ? (
+            <div className="flex items-center gap-2 text-xs text-neutral-500">
+              <Clock size={14} />
+              <span>Disconnesso</span>
+            </div>
+          ) : null}
         </div>
       </motion.div>
     </GlassCard>
