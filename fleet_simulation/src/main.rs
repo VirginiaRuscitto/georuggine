@@ -1,238 +1,120 @@
-use chrono::{DateTime, Utc};
-use csv::Reader;
-use rand::seq::IndexedRandom;
-use rand::{rng, RngExt};
-use std::time::Duration;
-use reqwest::{Client, Error};
-use serde::{Deserialize, Serialize};
-use crate::mqtt::{initialize_mqtt_client, send_message, send_position};
-use crate::osrm::{Posizione, SimulatoreVeicolo};
-use futures::future::join_all;
-use tokio;
-
-
-mod osrm;
+mod auth;
+mod dao;
+mod database;
+mod errors;
+mod handlers;
+mod logging;
+mod models;
 mod mqtt;
+mod state;
+mod tls;
 
-#[derive(Deserialize, Debug)]
-#[derive(Clone)]
-pub struct User {
-    pub id: i64,
-    pub name: String,
-    pub surname: String,
-    pub email: String,
-    pub created_at: DateTime<Utc>,
-    pub is_admin: bool,
-    pub state: UserState,
-}
+use tower_http::cors::{Any, CorsLayer};
+use axum::http::{Method, header};
+use axum::Router;
+use rumqttc::{AsyncClient, MqttOptions, TlsConfiguration, Transport};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use std::net::SocketAddr;
+use futures::FutureExt;
+use tokio::sync::broadcast;
 
-#[derive(Clone)]
-pub struct UserInfo{
-    pub lat: f64,
-    pub lon: f64,
-    pub lat_dest: f64,
-    pub lon_dest: f64,
-    pub token: String,
-}
+use database::connection::SharedDb;
+use state::{ActiveUsers, AppState, PositionUpdate};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum UserState {
-    Disconnected,
-    Stopped,
-    Moving,
-}
+const BROKER_CA_CERT: &[u8] = include_bytes!("../certs/broker.emqx.io-ca.crt");
+const MQTT_TLS_PORT: u16 = 8883;
 
-// 1. Define your target structure
-#[derive(Deserialize, Debug)]
-struct TokenResponse {
-    token: String
-}
-#[derive(Serialize, Debug)]
-struct UsersOption{
-    is_admin: bool,
-}
-
-/// Client HTTP condiviso, configurato per accettare il certificato TLS
-/// self-signed locale del backend (generato con mkcert per lo sviluppo).
-///
-/// NOTA per il report: `danger_accept_invalid_certs(true)` disabilita la
-/// verifica del certificato del server. Va bene per sviluppo/demo su
-/// localhost con un certificato self-signed che reqwest non riconosce
-/// nativamente, ma NON andrebbe mai usato contro un server pubblico reale:
-/// in quel caso il certificato deve essere valido (es. Let's Encrypt) e va
-/// lasciata attiva la verifica di default.
-fn build_http_client() -> Client {
-    Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()
-        .expect("impossibile costruire il client HTTP")
-}
-
-async fn get_users(  ) -> Result< Vec<User>, Error > {
-    let client = build_http_client();
-
-    let credentials = ("admin@example.com","Password123!");
-
-    let token = client.post("https://127.0.0.1:3001/api/login").json(&credentials)
-        .send().await?.json::<TokenResponse>().await?.token;
-
-    let users_option = UsersOption{is_admin: false};
-
-    let users = client.get("https://127.0.0.1:3001/api/users")
-        .header("Authorization", format!("Bearer {}", token))
-        .query(&users_option)
-        .send()
-        .await?
-        .json::<Vec<User>>()
-        .await?;
-
-    Ok(users)
-}
-
-/// Simula il movimento di un utente verso un kebab a caso: ogni 30s calcola
-/// la posizione successiva lungo il percorso reale e la pubblica via MQTT.
-/// Termina da sola quando il veicolo raggiunge la destinazione.
-async fn simula_movimento_utente(
-    user: User,
-    origine: (f64, f64),   // (lat, lon)
-    destinazione: (f64, f64), // (lat, lon)
-    token: String,
-    kebab_shops: Vec<KebabShop>
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // ottieni_percorso/SimulatoreVeicolo vogliono (lon, lat), non (lat, lon):
-    // qui invertiamo l'ordine per evitare il bug presente nella versione precedente.
-    let origine_lon_lat = (origine.1, origine.0);
-    let destinazione_lon_lat = (destinazione.1, destinazione.0);
-
-    let mut simulatore = SimulatoreVeicolo::nuovo(
-        &user.id.to_string(),
-        origine_lon_lat,
-        destinazione_lon_lat
-    ).await?;
-
-    let client_mqtt = initialize_mqtt_client(simulatore.id_veicolo(), "broker.emqx.io", 8883).await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    let mut last_pos = (0.0, 0.0);
-
-    loop {
-        tokio::time::sleep(Duration::from_secs(30)).await;
-
-        match simulatore.prossima_posizione(30.0) {
-            Some(pos) => {
-                last_pos = (pos.lat, pos.lon);
-                send_position(&client_mqtt, user.id, &token, pos.lat, pos.lon ).await?;
-                println!("[{}] {:?}", simulatore.id_veicolo(), pos);
-            }
-            None => {
-                let choice = {
-                    let mut rng = rng();
-                    rng.random_range(1..=15)
-                }; // rng dropped here, before any .await
-
-                match choice {
-                    1 => {
-                        send_message(&client_mqtt, user.id, &token, "destinazione raggiunta").await?;
-                        let mut rng = rng(); // new rng, only used synchronously
-                        let kebab = kebab_shops.choose(&mut rng).unwrap().clone();
-                        // note: this recursive call isn't awaited/spawned in your original code either — see below
-                    }
-                    2 => {
-                        tokio::time::sleep(Duration::from_secs(120)).await;
-                    }
-                    _ => {
-                        send_position(&client_mqtt, user.id, &token, last_pos.0, last_pos.1).await?;
-                    }
-                }
-            }
+fn spawn_supervised<F>(name: &'static str, fut: F)
+where F: std::future::Future<Output = ()> + Send + 'static{
+    tokio::spawn(async move {
+        let result = std::panic::AssertUnwindSafe(fut).catch_unwind().await;
+        if let Err(e) = result {
+            tracing::error!("task '{name}' terminato per panic: {e:?}");
+        } else {
+            tracing::warn!("task '{name}' terminato inaspettatamente (senza panic)");
         }
-    }
-
-    Ok(())
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct KebabShop{
-    name: String,
-    lat: f64,
-    lon: f64,
-}
-
-fn read_csv() -> Result<Vec<KebabShop>,Box<dyn std::error::Error + Send+Sync>> {
-    let mut rdr = Reader::from_path("kebab_torino_google.csv")?;
-
-    let mut shops: Vec<KebabShop> = Vec::new();
-
-    for result in rdr.deserialize() {
-        let shop: KebabShop = result?;
-        shops.push(shop);
-    }
-
-    Ok(shops)
+    });
 }
 
 #[tokio::main]
-async fn main() -> Result<(),Box<dyn std::error::Error + Send + Sync>> {
-    let kebab_shops = read_csv()?;
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+    logging::init_tracing();
 
-    if kebab_shops.is_empty() {
-        return Err(format!(
-            "kebab_torino_google.csv è stato letto correttamente ma non contiene righe di dati. \
-             Verifica che il file esista nella cartella da cui lanci `cargo run` (stessa cartella di Cargo.toml) \
-             e che contenga almeno una riga oltre all'intestazione."
-        ).into());
-    }
+    let db: SharedDb = database::connection::shared_connection()?;
+    let active_users: ActiveUsers = Arc::new(RwLock::new(HashMap::new()));
 
-    let users = get_users().await?;
-
-    if users.is_empty() {
-        return Err("nessun utente restituito da GET /api/users: crea prima degli utenti (es. con create_users.rs) prima di avviare la simulazione".into());
-    }
-
-    let mut handles = Vec::new();
-
-    for user in users.clone().into_iter() {
-        let mut rng = rng();
-        let kebab = kebab_shops.choose(&mut rng).unwrap();
-
-        // .choose() qui è sicuro perché abbiamo già verificato che kebab_shops non sia vuoto
-        let kebab = kebab_shops.choose(&mut rng)
-            .expect("kebab_shops non dovrebbe essere vuoto a questo punto, controllato sopra");
-
-        let client = build_http_client();
-
-        let token = client
-            .post("https://127.0.0.1:3001/api/login")
-            .json(&(user.email.clone(), "Password123!"))
-            .send()
-            .await?
-            .json::<TokenResponse>()
-            .await?
-            .token;
-
-        let dest = kebab_shops.choose(&mut rng)
-            .expect("kebab_shops non dovrebbe essere vuoto a questo punto, controllato sopra");
-
-        let handle = tokio::spawn(
-            simula_movimento_utente(
-                user,
-                (kebab.lat, kebab.lon),
-                (dest.lat, dest.lon),
-                token,
-                kebab_shops.clone())
-        );
-        handles.push(handle);
-    }
-
-    let results = join_all(handles).await;
-    for r in results {
-        match r {
-            Err(e) => eprintln!("task panicked: {:?}", e),
-            Ok(Err(e)) => eprintln!("task returned error: {:?}", e),
-            Ok(Ok(())) => {}
+    // --- Crash recovery ---
+    {
+        let now = chrono::Utc::now();
+        match dao::movement_sessions_dao::close_all_open_sessions(&db, now) {
+            Ok(0) => tracing::info!("crash recovery: nessuna sessione aperta da chiudere"),
+            Ok(n) => tracing::warn!("crash recovery: chiuse {n} sessioni rimaste aperte"),
+            Err(e) => tracing::error!("crash recovery: errore: {e}"),
         }
     }
+
+    // --- Canale broadcast per SSE ---
+    let (position_tx, _position_rx) = broadcast::channel::<PositionUpdate>(256);
+
+    // --- Connessione MQTT ---
+    let mut mqttoptions = MqttOptions::new("georuggine_server", "broker.emqx.io", MQTT_TLS_PORT);
+    mqttoptions.set_keep_alive(std::time::Duration::from_secs(5));
+    mqttoptions.set_transport(Transport::Tls(TlsConfiguration::Simple {
+        ca: BROKER_CA_CERT.to_vec(),
+        alpn: None,
+        client_auth: None,
+    }));
+    let (mqtt_client, eventloop) = AsyncClient::new(mqttoptions, 10);
+
+    let app_state = AppState {
+        db: db.clone(),
+        active_users: active_users.clone(),
+        mqtt_client: mqtt_client.clone(),
+        position_tx: position_tx.clone(),
+    };
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+        ]);
+
+    let app = Router::new()
+        .merge(auth::router())
+        .merge(handlers::messages::router())
+        .merge(handlers::users::router())
+        .merge(handlers::report::router())
+        .layer(cors)
+        .with_state(app_state);
+
+    // --- Task di background ---
+    spawn_supervised("cpu_logging", logging::cpu_logging_task());
+    spawn_supervised("mqtt_listener", mqtt::handler::start_mqtt_listener(
+        eventloop, db.clone(), active_users.clone(), mqtt_client.clone(), position_tx.clone(),
+    ));
+    spawn_supervised("stale_state_watcher", mqtt::handler::stale_state_watcher(
+        active_users, db, mqtt_client,
+    ));
+
+    // --- Server HTTPS ---
+    let tls_config = tls::load_or_explain("georuggine server").await?;
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
+    tracing::info!("Server HTTPS in ascolto su https://{addr}");
+
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app.into_make_service())
+        .await?;
 
     Ok(())
 }

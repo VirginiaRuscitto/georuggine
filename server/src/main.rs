@@ -21,16 +21,12 @@ use futures::FutureExt;
 use database::connection::SharedDb;
 use state::{ActiveUsers, AppState};
 
-// Certificato CA del broker pubblico EMQX, scaricato da
-// https://assets.emqx.com/data/broker.emqx.io-ca.crt e salvato in
-// certs/broker.emqx.io-ca.crt (stesso livello di Cargo.toml).
 const BROKER_CA_CERT: &[u8] = include_bytes!("../certs/broker.emqx.io-ca.crt");
 const MQTT_TLS_PORT: u16 = 8883;
 
 fn spawn_supervised<F>(name: &'static str, fut: F)
 where F: std::future::Future<Output = ()> + Send + 'static{
     tokio::spawn(async move {
-        //AssertUnwindSafe perché i task non condividono stato mutabile instabile col resto
         let result = std::panic::AssertUnwindSafe(fut).catch_unwind().await;
         if let Err(e) = result {
             tracing::error!("task '{name}' terminato per panic: {e:?}");
@@ -47,6 +43,16 @@ async fn main() -> anyhow::Result<()> {
 
     let db: SharedDb = database::connection::shared_connection()?;
     let active_users: ActiveUsers = Arc::new(RwLock::new(HashMap::new()));
+
+    // --- Crash recovery: chiudi tutte le sessioni rimaste aperte da arresto anomalo ---
+    {
+        let now = chrono::Utc::now();
+        match dao::movement_sessions_dao::close_all_open_sessions(&db, now) {
+            Ok(0) => tracing::info!("crash recovery: nessuna sessione aperta da chiudere"),
+            Ok(n) => tracing::warn!("crash recovery: chiuse {n} sessioni rimaste aperte"),
+            Err(e) => tracing::error!("crash recovery: errore: {e}"),
+        }
+    }
 
     // --- Connessione al broker MQTT (in TLS, porta 8883) ---
     let mut mqttoptions = MqttOptions::new("georuggine_server", "broker.emqx.io", MQTT_TLS_PORT);
@@ -65,19 +71,19 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let cors = CorsLayer::new()
-    .allow_origin(Any) //TODO togliere any e mettere le robe giuste da accettare
-    .allow_methods([
-        Method::GET,
-        Method::POST,
-        Method::PUT,
-        Method::DELETE,
-        Method::OPTIONS,
-    ])
-    .allow_headers([
-        header::AUTHORIZATION,
-        header::CONTENT_TYPE,
-        header::ACCEPT,
-    ]);
+        .allow_origin(Any)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+        ]);
 
     let app = Router::new()
         .merge(auth::router())
@@ -97,13 +103,7 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // --- Server HTTPS ---
-    // Certificato self-signed locale (vedi tls.rs per come generarlo).
-    // NOTA per il report: per un deploy pubblico reale il certificato TLS va
-    // ottenuto da una CA riconosciuta (es. Let's Encrypt) per un dominio
-    // effettivamente posseduto, tipicamente terminando TLS con un reverse
-    // proxy (nginx/Caddy) davanti a questo servizio Axum.
     let tls_config = tls::load_or_explain("georuggine server").await?;
-
     let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
     tracing::info!("Server HTTPS in ascolto su https://{addr}");
 

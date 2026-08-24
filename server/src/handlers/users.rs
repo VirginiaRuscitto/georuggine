@@ -30,6 +30,20 @@ pub struct UserStatus {
     pub is_admin: bool,
 }
 
+/// Risposta di `GET /api/me`: uguale a `User` ma con il campo `state`
+/// letto dalla mappa in-memory `ActiveUsers`. Se l'utente non è presente
+/// nella mappa, lo stato è `Disconnected`.
+#[derive(Serialize)]
+pub struct MeResponse {
+    pub id: i64,
+    pub name: String,
+    pub surname: String,
+    pub email: String,
+    pub created_at: DateTime<Utc>,
+    pub is_admin: bool,
+    pub state: UserState,
+}
+
 #[derive(Deserialize)]
 pub struct UsersQuery {
     pub order_by_field: Option<OrderByField>,
@@ -81,14 +95,34 @@ async fn me_handler(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
 ) -> Response {
-    match users_dao::get_user_by_id(&state.db, claims.sub) {
-        Ok(Some(user)) => (StatusCode::OK, Json(user)).into_response(),
-        Ok(None) => error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
+    let user = match users_dao::get_user_by_id(&state.db, claims.sub) {
+        Ok(Some(u)) => u,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
         Err(e) => {
             tracing::error!("errore get_user_by_id: {e}");
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore del server")
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore del server");
         }
-    }
+    };
+
+    let state_value = {
+        let active = state.active_users.read().unwrap();
+        active
+            .get(&user.id)
+            .map(|s| s.state)
+            .unwrap_or(UserState::Disconnected)
+    };
+
+    let response = MeResponse {
+        id: user.id,
+        name: user.name,
+        surname: user.surname,
+        email: user.email,
+        created_at: user.created_at,
+        is_admin: user.is_admin,
+        state: state_value,
+    };
+
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 async fn delete_user_handler(State(state): State<AppState>, Extension(claims): Extension<Claims>, Path(user_id): Path<i64>) -> Response {

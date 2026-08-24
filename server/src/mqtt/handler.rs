@@ -9,10 +9,10 @@ use crate::dao::{messages_dao, movement_sessions_dao, position_log_dao};
 use crate::handlers::messages;
 use crate::mqtt::outbound;
 
-pub const STALE_AFTER_SECS: i64 = 180; //movimento -> fermo senza cambi coordinate
-pub const COORD_EPSILON: f64 = 0.0001; //soglia per considerare due coordinate "diverse"
-pub const DISCONNECT_AFTER_SECS: i64 = 120; //fermo/movimento -> disconnesso senza posizioni ricevute - 4x l'intervallo di invio (30s) per tollerare qualche pacchetto perso
-const MIN_MESSAGE_INTERVAL_SECS: i64 = 1; //intervallo minimo tra due messaggi accettati dallo stesso utente via MQTT
+pub const STALE_AFTER_SECS: i64 = 180;
+pub const COORD_EPSILON: f64 = 0.0001;
+pub const DISCONNECT_AFTER_SECS: i64 = 120;
+const MIN_MESSAGE_INTERVAL_SECS: i64 = 1;
 
 #[derive(Deserialize)]
 pub struct PositionUpdatePayload {
@@ -53,21 +53,18 @@ fn coords_changed(old_pos: Option<&Position>, new_pos: &Position) -> bool {
     }
 }
 
-/// Garantisce che l'utente abbia una sessione attiva in memoria.
-/// Se è la prima volta che lo vediamo (posizione o messaggio) crea anche la sessione iniziale "Stopped" nel DB.
 fn ensure_active_session(active: &ActiveUsers, db: &SharedDb, user_id: i64, now: DateTime<Utc>) {
     let is_new = {
         let mut users = active.write().unwrap();
         let is_new = !users.contains_key(&user_id);
-
-        users
-            .entry(user_id)
-            .or_insert_with(|| UserSession::new(now));
-
+        users.entry(user_id).or_insert_with(|| UserSession::new(now));
         is_new
     };
 
     if is_new {
+        if let Err(e) = movement_sessions_dao::close_all_open_sessions_for_user(db, user_id, now) {
+            tracing::error!("errore chiusura sessioni residue per user {user_id}: {e}");
+        }
         if let Err(e) = movement_sessions_dao::insert_movement_session(
             db,
             user_id,
@@ -79,9 +76,6 @@ fn ensure_active_session(active: &ActiveUsers, db: &SharedDb, user_id: i64, now:
     }
 }
 
-/// Verifica la transizione di stato tra due coordinate o in base al tempo
-/// Fermo->Movimento: appena il cambio è stato rilevato
-/// Movimento->Fermo: il momento in cui le coordinate hanno smesso di cambiare, non quello in cui ce ne accorgiamo 
 fn check_state_transition(
     moved: bool,
     last_coord_change_at: DateTime<Utc>,
@@ -96,8 +90,6 @@ fn check_state_transition(
     }
 }
 
-/// Aggiorna (o crea) la sessione attiva dell'utente con la nuova posizione,
-/// restituendo l'eventuale nuovo stato 
 fn update_session_position(
     active: &ActiveUsers,
     user_id: i64,
@@ -105,7 +97,6 @@ fn update_session_position(
     now: DateTime<Utc>,
 ) -> Option<(UserState, DateTime<Utc>)> {
     let mut users = active.write().unwrap();
-
     let session = users
         .get_mut(&user_id)
         .expect("sessione creata da ensure_active_session");
@@ -142,7 +133,6 @@ fn validate_coordinates(lat: f64, lon: f64) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Gestisce l'aggiornamento della posizione del veicolo (ricevuto ogni 30s)
 async fn handle_position_update(
     user_id: i64,
     payload: PositionUpdatePayload,
@@ -193,7 +183,7 @@ async fn handle_position_update(
 fn check_and_update_rate_limit(active: &ActiveUsers, user_id: i64, now: DateTime<Utc>) -> bool {
     let mut users = active.write().unwrap();
     let session = users.entry(user_id).or_insert_with(|| UserSession::new(now));
-    session.last_seen_at = now; //un messaggio è comunque un segnale di vita
+    session.last_seen_at = now;
 
     if let Some(last) = session.last_message_at {
         if now.signed_duration_since(last).num_seconds() < MIN_MESSAGE_INTERVAL_SECS {
@@ -204,8 +194,6 @@ fn check_and_update_rate_limit(active: &ActiveUsers, user_id: i64, now: DateTime
     true
 }
 
-//Salva nel DB un messaggio inviato da un utente al server (sender = utente, recipient = NULL).
-//Applica un rate limit (1 messaggio/secondo per utente) per evitare che un client in loop riempia la tabella messages senza controllo.
 async fn handle_user_message(
     user_id: i64,
     payload: UserMessagePayload,
@@ -240,9 +228,6 @@ async fn handle_user_message(
     }
 }
 
-/// Task periodico che controlla l'inattività dei veicoli e forza lo stato "Stopped" dopo 3 minuti
-/// dopo un periodo senza alcun segnale (posizione o messaggio) -> Disconnesso
-/// (rimozione dalla mappa attiva e chiusura della sessione movement_sessions aperta).
 pub async fn stale_state_watcher(active: ActiveUsers, db: SharedDb, mqtt_client: AsyncClient) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
 
@@ -288,7 +273,6 @@ pub async fn stale_state_watcher(active: ActiveUsers, db: SharedDb, mqtt_client:
     }
 }
 
-/// Loop principale per la ricezione e il routing dei messaggi
 pub async fn start_mqtt_listener(
     mut eventloop: EventLoop,
     db: SharedDb,

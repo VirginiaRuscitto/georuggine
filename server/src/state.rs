@@ -7,10 +7,10 @@ use crate::models::{Position, UserState};
 
 pub struct UserSession {
     pub last_position: Option<Position>,
-    pub last_change_at: DateTime<Utc>, //si aggiorna quando cambia lo stato
-    pub last_coord_change_at: DateTime<Utc>, //istante dell'ultimo cambio reale di coordinate
-    pub last_seen_at: DateTime<Utc>, //aggiornato ad ogni posizione ricevuta
-    pub last_message_at: Option<DateTime<Utc>>, //aggiornato ad ogni messaggio accettato, per il rate limiting
+    pub last_change_at: DateTime<Utc>,
+    pub last_coord_change_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub last_message_at: Option<DateTime<Utc>>,
     pub state: UserState,
 }
 

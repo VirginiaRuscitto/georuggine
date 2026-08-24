@@ -28,18 +28,36 @@ pub struct SelfReportQuery {
     pub period: ReportPeriod,
 }
 
-/// GET /api/report?user_id=&period=  (solo admin)
 pub async fn get_report_handler(State(state): State<AppState>, Query(params): Query<ReportQuery>) -> Response {
     build_report(&state, params.user_id, params.period).await
 }
 
-/// GET /api/me/report?period=  (utente autenticato, sempre e solo sul proprio user_id)
-pub async fn get_own_report_handler(
+pub async fn get_own_positions_handler(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Query(params): Query<SelfReportQuery>,
 ) -> Response {
-    build_report(&state, claims.sub, params.period).await
+    let session = match movement_sessions_dao::get_open_session_for_user(&state.db, claims.sub) {
+        Ok(Some(s)) => s,
+        Ok(None) => return Json(Vec::<Position>::new()).into_response(),
+        Err(e) => {
+            tracing::error!("errore get_open_session_for_user: {e}");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile recuperare la sessione");
+        }
+    };
+
+    let (_, period_end) = get_start_end_from_report_period(params.period);
+    let start = session.started_at - chrono::Duration::seconds(60);
+
+    let positions = match position_log_dao::get_positions_in_range(&state.db, claims.sub, start, period_end) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("errore get_positions_in_range: {e}");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile recuperare le posizioni");
+        }
+    };
+
+    Json(positions).into_response()
 }
 
 async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> Response {
@@ -140,7 +158,7 @@ pub fn compute_avg_speed_kmh(positions: &[Position], movement_duration_secs: i64
         return 0.0;
     }
 
-    const MAX_GAP_SECS: i64 = 90; //3x l'intervallo di invio (30s) e vuol dire coppia non contigua, probabile disconnessione
+    const MAX_GAP_SECS: i64 = 90;
 
     let total_distance_km: f64 = positions
         .windows(2)
@@ -184,6 +202,6 @@ fn admin_router() -> Router<AppState> {
 
 fn self_router() -> Router<AppState> {
     Router::new()
-        .route("/api/me/report", get(get_own_report_handler))
+        .route("/api/me/positions", get(get_own_positions_handler))
         .layer(middleware::from_fn(auth::jwt_auth_middleware))
 }

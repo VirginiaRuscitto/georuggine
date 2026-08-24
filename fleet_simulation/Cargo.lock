@@ -260,6 +260,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "yoke",
+ "yoke-derive",
 ]
 
 [[package]]

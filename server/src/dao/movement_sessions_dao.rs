@@ -54,3 +54,39 @@ pub fn get_sessions_in_range(db: &SharedDb, user_id: i64, from: DateTime<Utc>, t
     let rows = stmt.query_map(params![user_id, from, to], row_to_session)?;
     rows.collect()
 }
+
+pub fn get_open_session_for_user(db: &SharedDb, user_id: i64) -> Result<Option<MovementSession>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, user_id, state, started_at, ended_at 
+         FROM movement_sessions
+         WHERE user_id = ?1 AND ended_at IS NULL
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map(params![user_id], row_to_session)?;
+    Ok(rows.next().transpose()?)
+}
+
+/// Chiude TUTTE le sessioni aperte (ended_at IS NULL) per un utente,
+/// settando ended_at al timestamp fornito. Usata al riavvio del server
+/// per il crash recovery e da ensure_active_session per pulizia preventiva.
+pub fn close_all_open_sessions_for_user(db: &SharedDb, user_id: i64, ended_at: DateTime<Utc>) -> Result<usize> {
+    let conn = db.lock().unwrap();
+    let affected = conn.execute(
+        "UPDATE movement_sessions SET ended_at = ?1 WHERE user_id = ?2 AND ended_at IS NULL",
+        params![ended_at, user_id],
+    )?;
+    Ok(affected)
+}
+
+/// Chiude TUTTE le sessioni aperte nel database (crash recovery allo startup).
+/// Restituisce il numero di sessioni chiuse.
+pub fn close_all_open_sessions(db: &SharedDb, ended_at: DateTime<Utc>) -> Result<usize> {
+    let conn = db.lock().unwrap();
+    let affected = conn.execute(
+        "UPDATE movement_sessions SET ended_at = ?1 WHERE ended_at IS NULL",
+        params![ended_at],
+    )?;
+    Ok(affected)
+}
