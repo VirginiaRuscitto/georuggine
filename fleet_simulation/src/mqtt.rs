@@ -57,7 +57,7 @@ pub async fn initialize_mqtt_client(
     tokio::spawn(async move {
         loop {
             match eventloop.poll().await {
-                Ok(event) => println!("evento MQTT: {event:?}"),
+                Ok(event) => {},
                 Err(e) => {
                     println!("errore nell'eventloop MQTT: {e:?}");
                     tokio::time::sleep(Duration::from_secs(1)).await;

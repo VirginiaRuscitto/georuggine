@@ -8,7 +8,8 @@
 //!
 //! Run with:
 //!     cargo run --bin replay
-//!     cargo run --bin replay -- positions.csv messages.csv
+//!     cargo run --bin replay -- 15
+//!     cargo run --bin replay -- 15 positions.csv messages.csv
 
 use csv::Reader;
 use reqwest::{Client, Error};
@@ -111,6 +112,7 @@ async fn replay_user(
     user_id: i64,
     email: String,
     mut events: Vec<Event>,
+    speed_factor: u32,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if events.is_empty() {
         println!("[user {}] No events to replay", user_id);
@@ -135,21 +137,22 @@ async fn replay_user(
 
     let client_id = format!("replay_user_{}", user_id);
     let mqtt_client = initialize_mqtt_client(&client_id, "broker.emqx.io", 8883).await?;
-    sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500 / speed_factor as u64)).await;
 
     let start = Instant::now();
+    let behind_threshold = Duration::from_millis(100 / speed_factor as u64).max(Duration::from_millis(1));
 
     for event in &events {
         let offset_ms = match &event {
             Event::Position { offset_ms, .. } => *offset_ms,
             Event::Message { offset_ms, .. } => *offset_ms,
         };
-        let target = Duration::from_millis(offset_ms);
+        let target = Duration::from_millis(offset_ms / speed_factor as u64);
         let elapsed = start.elapsed();
 
         if target > elapsed {
             sleep(target - elapsed).await;
-        } else if elapsed > target + Duration::from_millis(100) {
+        } else if elapsed > target + behind_threshold {
             eprintln!(
                 "[user {}] Behind schedule by {:?} at offset {:?}",
                 user_id,
@@ -186,15 +189,26 @@ async fn replay_user(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let positions_path = std::env::args()
-        .nth(1)
+    let mut args = std::env::args().skip(1);
+
+    let speed_factor: u32 = args
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+
+    let positions_path = args
+        .next()
         .unwrap_or_else(|| "positions.csv".to_string());
-    let messages_path = std::env::args()
-        .nth(2)
+
+    let messages_path = args
+        .next()
         .unwrap_or_else(|| "messages.csv".to_string());
 
     println!("Loading positions from: {}", positions_path);
     println!("Loading messages from: {}", messages_path);
+    if speed_factor > 1 {
+        println!("Replay speed: {}x", speed_factor);
+    }
 
     let positions = read_positions_csv(&positions_path)?;
     let messages = read_messages_csv(&messages_path)?;
@@ -234,7 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut handles: Vec<JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>> = Vec::new();
 
     for (user_id, (email, events)) in events_by_user {
-        handles.push(tokio::spawn(replay_user(user_id, email, events)));
+        handles.push(tokio::spawn(replay_user(user_id, email, events, speed_factor)));
     }
 
     for handle in handles {

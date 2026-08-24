@@ -3,7 +3,11 @@
 //! Simulates user movement and saves positions + messages to CSV.
 //! Each row includes user_id AND email so replay can login directly.
 //!
-//!     cargo run --bin bake_simulation
+//!     cargo run --bin bake_simulation <MINUTES>
+//!
+//! Example:
+//!     cargo run --bin bake_simulation 120   # simulate 2 hours
+//!     cargo run --bin bake_simulation 10    # simulate 10 minutes (default: 60)
 
 use chrono::{DateTime, Utc};
 use csv::{Reader, WriterBuilder};
@@ -13,7 +17,6 @@ use reqwest::{Client, Error};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use futures::future::join_all;
 use tokio;
@@ -24,8 +27,8 @@ use osrm::SimulatoreVeicolo;
 
 const POSITIONS_CSV: &str = "positions.csv";
 const MESSAGES_CSV: &str = "messages.csv";
-
-static PROGRAM_START: LazyLock<Instant> = LazyLock::new(Instant::now);
+const TICK_SECONDS: u64 = 30;
+const PAUSE_SECONDS: u64 = 120;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct User {
@@ -108,126 +111,123 @@ async fn login_user(email: &str) -> Result<String, Error> {
 
 async fn simulate_user_movement(
     user: User,
-    origin: (f64, f64),
-    destination: (f64, f64),
-    destination_name: String,
+    initial_origin: (f64, f64),
+    initial_destination: (f64, f64),
+    initial_destination_name: String,
     kebab_shops: Vec<KebabShop>,
-    token: String,
+    simulation_duration_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let origin_lon_lat = (origin.1, origin.0);
-    let destination_lon_lat = (destination.1, destination.0);
+    let mut current_origin = initial_origin;
+    let mut current_destination = initial_destination;
+    let mut current_destination_name = initial_destination_name;
 
-    let mut simulator = SimulatoreVeicolo::nuovo(
-        &user.id.to_string(),
-        origin_lon_lat,
-        destination_lon_lat,
-    ).await?;
-
+    let mut simulated_elapsed_ms: u64 = 0;
+    let mut last_pos_time_ms: u64 = 0;
+    let mut last_msg_time_ms: u64 = 0;
     let mut last_pos = (0.0, 0.0);
-    let mut last_pos_time = *PROGRAM_START;
-    let mut last_msg_time = *PROGRAM_START;
 
+    // Outer loop: each iteration is a new leg (origin -> destination)
     loop {
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        let origin_lon_lat = (current_origin.1, current_origin.0);
+        let destination_lon_lat = (current_destination.1, current_destination.0);
 
-        match simulator.prossima_posizione(30.0) {
-            Some(pos) => {
-                last_pos = (pos.lat, pos.lon);
-                add_position(
-                    POSITIONS_CSV,
-                    user.id,
-                    &user.email,
-                    pos.lat,
-                    pos.lon,
-                    &mut last_pos_time,
-                )?;
-                println!("[{}] {:?}", simulator.id_veicolo(), pos);
+        let mut simulator = SimulatoreVeicolo::nuovo(
+            &user.id.to_string(),
+            origin_lon_lat,
+            destination_lon_lat,
+        ).await?;
+
+        // Inner loop: drive the current leg
+        loop {
+            if simulated_elapsed_ms >= simulation_duration_ms {
+                println!(
+                    "[{}] Simulation time limit reached ({} min)",
+                    simulator.id_veicolo(),
+                    simulation_duration_ms / 60_000
+                );
+                return Ok(());
             }
-            None => {
-                let choice = {
-                    let mut rng = rng();
-                    rng.random_range(1..=15)
-                };
 
-                match choice {
-                    1 => {
-                        println!("Destination reached: {}", destination_name);
-                        add_message(
-                            MESSAGES_CSV,
-                            user.id,
-                            &user.email,
-                            "destinazione raggiunta",
-                            &mut last_msg_time,
-                        )?;
+            simulated_elapsed_ms += TICK_SECONDS * 1_000;
 
-                        let next_kebab = {
-                            let mut rng = rng();
-                            kebab_shops.choose(&mut rng).unwrap().clone()
-                        };
+            match simulator.prossima_posizione(TICK_SECONDS as f64) {
+                Some(pos) => {
+                    last_pos = (pos.lat, pos.lon);
+                    add_position(
+                        POSITIONS_CSV,
+                        user.id,
+                        &user.email,
+                        pos.lat,
+                        pos.lon,
+                        simulated_elapsed_ms,
+                        &mut last_pos_time_ms,
+                    )?;
+                    println!(
+                        "[{}] {:?}  (sim +{} ms)",
+                        simulator.id_veicolo(), pos, simulated_elapsed_ms
+                    );
+                }
+                None => {
+                    let choice = {
+                        let mut rng = rng();
+                        rng.random_range(1..=15)
+                    };
 
-                        start_next_leg(
-                            user.clone(),
-                            destination,
-                            (next_kebab.lat, next_kebab.lon),
-                            next_kebab.name.clone(),
-                            kebab_shops.clone(),
-                        );
+                    match choice {
+                        1 => {
+                            println!(
+                                "[{}] Destination reached: {}  (sim +{} ms)",
+                                simulator.id_veicolo(),
+                                current_destination_name,
+                                simulated_elapsed_ms
+                            );
+                            add_message(
+                                MESSAGES_CSV,
+                                user.id,
+                                &user.email,
+                                "destinazione raggiunta",
+                                simulated_elapsed_ms,
+                                &mut last_msg_time_ms,
+                            )?;
 
-                        return Ok(());
-                    }
-                    2 => {
-                        add_message(
-                            MESSAGES_CSV,
-                            user.id,
-                            &user.email,
-                            "pausa di 120 secondi",
-                            &mut last_msg_time,
-                        )?;
-                        tokio::time::sleep(Duration::from_secs(120)).await;
-                    }
-                    _ => {
-                        add_position(
-                            POSITIONS_CSV,
-                            user.id,
-                            &user.email,
-                            last_pos.0,
-                            last_pos.1,
-                            &mut last_pos_time,
-                        )?;
+                            let next_kebab = {
+                                let mut rng = rng();
+                                kebab_shops.choose(&mut rng).unwrap().clone()
+                            };
+
+                            // Set up next leg and break inner loop
+                            current_origin = current_destination;
+                            current_destination = (next_kebab.lat, next_kebab.lon);
+                            current_destination_name = next_kebab.name.clone();
+                            break;
+                        }
+                        2 => {
+                            add_message(
+                                MESSAGES_CSV,
+                                user.id,
+                                &user.email,
+                                "pausa di 120 secondi",
+                                simulated_elapsed_ms,
+                                &mut last_msg_time_ms,
+                            )?;
+                            simulated_elapsed_ms += PAUSE_SECONDS * 1_000;
+                        }
+                        _ => {
+                            add_position(
+                                POSITIONS_CSV,
+                                user.id,
+                                &user.email,
+                                last_pos.0,
+                                last_pos.1,
+                                simulated_elapsed_ms,
+                                &mut last_pos_time_ms,
+                            )?;
+                        }
                     }
                 }
             }
         }
     }
-}
-
-fn start_next_leg(
-    user: User,
-    origin: (f64, f64),
-    destination: (f64, f64),
-    destination_name: String,
-    kebab_shops: Vec<KebabShop>,
-) {
-    let user_id = user.id;
-    tokio::spawn(async move {
-        match login_user(&user.email).await {
-            Ok(token) => {
-                if let Err(e) = simulate_user_movement(
-                    user,
-                    origin,
-                    destination,
-                    destination_name,
-                    kebab_shops,
-                    token,
-                ).await {
-                    eprintln!("Next leg error for user {}: {}", user_id, e);
-                }
-            }
-            Err(e) => {
-                eprintln!("Login error for user {}: {}", user_id, e);
-            }
-        }
-    });
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -247,9 +247,9 @@ fn read_csv() -> Result<Vec<KebabShop>, Box<dyn std::error::Error + Send + Sync>
     Ok(shops)
 }
 
-// ===================================================================
+// =======================================================================
 // CSV records now include email
-// ===================================================================
+// =======================================================================
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PositionRecord {
@@ -306,19 +306,18 @@ pub fn add_position(
     email: &str,
     lat: f64,
     lon: f64,
-    last_time: &mut Instant,
+    simulated_now_ms: u64,
+    last_time_ms: &mut u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let now = Instant::now();
-    let elapsed_from_start = now.duration_since(*PROGRAM_START).as_millis() as u64;
-    let elapsed_from_last = now.duration_since(*last_time).as_millis() as u64;
-    *last_time = now;
+    let elapsed_from_last = simulated_now_ms.saturating_sub(*last_time_ms);
+    *last_time_ms = simulated_now_ms;
 
     let record = PositionRecord {
         user_id,
         email: email.to_string(),
         lat,
         lon,
-        elapsed_from_start_ms: elapsed_from_start,
+        elapsed_from_start_ms: simulated_now_ms,
         elapsed_from_last_ms: elapsed_from_last,
     };
     append_record(path, &record)
@@ -329,18 +328,17 @@ pub fn add_message(
     user_id: i64,
     email: &str,
     message: &str,
-    last_time: &mut Instant,
+    simulated_now_ms: u64,
+    last_time_ms: &mut u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let now = Instant::now();
-    let elapsed_from_start = now.duration_since(*PROGRAM_START).as_millis() as u64;
-    let elapsed_from_last = now.duration_since(*last_time).as_millis() as u64;
-    *last_time = now;
+    let elapsed_from_last = simulated_now_ms.saturating_sub(*last_time_ms);
+    *last_time_ms = simulated_now_ms;
 
     let record = MessageRecord {
         user_id,
         email: email.to_string(),
         message: message.to_string(),
-        elapsed_from_start_ms: elapsed_from_start,
+        elapsed_from_start_ms: simulated_now_ms,
         elapsed_from_last_ms: elapsed_from_last,
     };
     append_record(path, &record)
@@ -348,6 +346,22 @@ pub fn add_message(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // ------------------------------------------------------------------
+    // CLI: first positional argument = simulation duration in minutes
+    // ------------------------------------------------------------------
+    let simulation_minutes: u64 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    let simulation_duration_ms = simulation_minutes * 60_000;
+
+    println!(
+        "=== Fleet Simulation ===\nDuration: {} minutes ({} ms simulated)\n",
+        simulation_minutes, simulation_duration_ms
+    );
+
+    let real_start = Instant::now();
+
     let kebab_shops = read_csv()?;
 
     if kebab_shops.is_empty() {
@@ -378,15 +392,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let dest = kebab_shops.choose(&mut rng)
             .expect("kebab_shops should not be empty at this point, checked above");
 
-        let token = login_user(&user.email).await?;
-
         let handle = tokio::spawn(simulate_user_movement(
             user.clone(),
             (kebab.lat, kebab.lon),
             (dest.lat, dest.lon),
             dest.name.clone(),
             kebab_shops.clone(),
-            token,
+            simulation_duration_ms,
         ));
         handles.push(handle);
     }
@@ -399,6 +411,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Ok(Ok(())) => {}
         }
     }
+
+    let real_elapsed = real_start.elapsed();
+    println!(
+        "\n=== Simulation complete ===\nSimulated: {} min  |  Real time: {:?}",
+        simulation_minutes, real_elapsed
+    );
 
     Ok(())
 }
