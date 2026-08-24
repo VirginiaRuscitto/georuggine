@@ -152,6 +152,12 @@ async fn handle_position_update(
 
     let now = Utc::now();
     ensure_active_session(active, db, user_id, now);
+    {
+        let mut users = active.write().unwrap();
+        if let Some(session) = users.get_mut(&user_id) {
+            session.last_seen_at = now;
+        }
+    }
     let new_pos = Position {
         lat: payload.lat,
         lon: payload.lon,

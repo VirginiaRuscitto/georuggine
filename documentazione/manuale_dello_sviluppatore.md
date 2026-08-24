@@ -8,6 +8,8 @@ Il progetto è organizzato in due parti: client e server. Il client rappresenta 
 
 La comunicazione tra client e server utilizza protocolli diversi in base al tipo di operazione e di client. Le operazioni come l'autenticazione, la registrazione e la consultazione dello storico dei messaggi utilizzano HTTPS REST per entrambi i client. L'amministratore utilizza HTTPS per attività come la gestione degli utenti, la generazione dei report e l'invio di messaggi diretti o broadcast. Trattandosi di un client utilizzato da una postazione stabile, il modello richiesta-risposta di HTTPS si adatta bene alle interazioni con il server. Il client degli utenti utilizza invece MQTT, dovendo inviare periodicamente al server la propria posizione. La scelta è legata alla natura IoT del client, che può trovarsi in presenza di una connessione meno stabile. MQTT permette di gestire questo tipo di comunicazione senza dover effettuare una nuova richiesta HTTPS per ogni posizione e offrendo inoltre meccanismi di gestione e ritrasmissione dei messaggi. L'utilizzo di MQTT viene esteso anche alle altre comunicazioni del client utente, quali l'invio e la ricezione dei messaggi e la gestione delle notifiche relative ai cambiamenti di stato e agli errori. Questa scelta consente di mantenere un unico meccanismo di comunicazione, evitando di introdurre ulteriori protocolli e sfruttando un approccio coerente con la natura IoT del client.
 
+TODO compatibilità
+
 ### 1.2 Stack tecnico
 
 | Tecnologia |Utilizzo nel progetto |
@@ -166,6 +168,8 @@ La generazione del report viene gestita da `get_report_handler`, che riceve l'id
 
 A partire dalle posizioni recuperate viene ricostruito il tragitto dell'utente e viene calcolata la velocità media tramite `compute_avg_speed_kmh`. La funzione considera le coppie consecutive di posizioni e ne calcola la distanza geografica tramite `haversine_distance_km`, sommando le distanze ottenute e rapportandole alla durata complessiva del movimento. Le coppie di posizioni separate da più di 90 secondi vengono escluse dal calcolo, poiché considerate non contigue e potenzialmente riconducibili a una disconnessione. Le durate del movimento e delle pause vengono invece calcolate da `compute_durations` a partire dalle `MovementSession`, sommando separatamente la durata delle sessioni `Moving` e `Stopped` all'interno dell'intervallo richiesto.
 
+Inoltre, la funzione `get_own_positions_handler` permette agli utenti autenticati di recuperare le proprie posizioni relative alla sessione di movimento attualmente aperta, considerando un intervallo che parte da 60 secondi prima dell’inizio della sessione e termina al momento della richiesta.
+
 ## 7. Messaggistica (handlers/messages.rs, mqtt/handlers.rs)
 
 Il sistema di messaggistica gestisce l'invio e la ricezione di messaggi diretti e broadcast. HTTPS viene utilizzato dall'amministratore per l'invio dei messaggi e da entrambi i client per la consultazione dello storico. MQTT viene invece utilizzato per lo scambio dei messaggi tra gli utenti e il server.
@@ -182,14 +186,15 @@ I messaggi inviati dal server vengono ricevuti dagli utenti tramite topic MQTT d
 
 Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto dal server sul canale dedicato all'utente e passato a `handle_user_message` per la gestione e il salvataggio. Prima di procedere, viene verificato che l'utente non abbia già inviato un altro messaggio nell'ultimo secondo, applicando un rate limit per evitare un invio eccessivo di messaggi, sia per limitare il carico sul server e sul database sia per ridurre il rischio di attacchi basati sull'invio massivo di richieste. Se il controllo viene superato, il messaggio viene salvato nel database associandolo all'utente come mittente. In questo modo i messaggi ricevuti tramite MQTT vengono persistiti nello stesso storico utilizzato dai messaggi inviati tramite HTTPS. Si sottolinea che anche la ricezione di un messaggio costituisce un segnale di vita dell'utente e aggiorna quindi `last_seen_at`; in questo modo si evita di considerare l'utente come disconnesso finché continuano ad arrivare messaggi.
 
-## N. Frontend
+## 8. Frontend
 
-### N.1
+### 8.1
 
+Se ti interessa io nel corso di applicazioni web avevo fatto "componenti principali" con una breve spiegazione e "pagine"
 
-## N. API
+## 9. API
 
-### N.1 HTTPS
+### 9.1 HTTPS
 
 - **POST `/api/register`**
   - Request body:
@@ -403,8 +408,29 @@ Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto d
   - Response 403 Forbidden: `{"error": "Accesso riservato agli amministratori"}`
   - Response 404 Not Found: `{"error": "Utente non trovato"}`
   - Response 500 Internal Server Error: `{"error": "Errore del server"}` oppure `{"error": "Impossibile calcolare il tragitto"}` oppure `{"error": "Impossibile calcolare le durate del movimento e delle pause"}`
+- **GET `/api/me/positions`**
+  - Query parameters:
+    - `period`
+  - Response 200 OK:
+    ```json
+    [
+      {
+        "lat": 45.0703,
+        "lon": 7.6869,
+        "recorded_at": "2026-06-20T14:30:45Z"
+      },
+      {
+        "lat": 45.0721,
+        "lon": 7.6895,
+        "recorded_at": "2026-06-20T14:31:20Z"
+      }
+    ]
+    ```
+  - Response 401 Unauthorized: `{"error": "L'utente non ha effettuato l'accesso"}`
+  - Response 500 Internal Server Error: `{"error": "Impossibile recuperare la sessione"}` oppure `{"error": "Impossibile recuperare le posizioni"}`
 
-### N.2 MQTT
+
+### 9.2 MQTT
 
 - **Publish `georuggine/client/:user_id/position`**
   - QoS: `AtMostOnce (0)`
@@ -468,6 +494,6 @@ Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto d
     }
     ```
 
-## N. Demo
+## 10. Demo
 
-TODO
+TODO dire anche degli script nel bin per gli utenti e i messaggi e che tutti gli utenti hanno la psw Password123!
