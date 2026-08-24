@@ -70,7 +70,7 @@ fn build_http_client() -> Client {
 }
 
 async fn get_users(  ) -> Result< Vec<User>, Error > {
-    let client = Client::new();
+    let client = build_http_client();
 
     let credentials = ("admin@example.com","Password123!");
 
@@ -111,7 +111,7 @@ async fn simula_movimento_utente(
         destinazione_lon_lat
     ).await?;
 
-    let client_mqtt = initialize_mqtt_client(simulatore.id_veicolo(), "broker.emqx.io", 1883).await?;
+    let client_mqtt = initialize_mqtt_client(simulatore.id_veicolo(), "broker.emqx.io", 8883).await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let mut last_pos = (0.0, 0.0);
