@@ -6,6 +6,7 @@ import DashboardPage from './pages/DashboardPage';
 import MessagesPage from './pages/MessagesPage';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
 import AdminUsersPage from './pages/admin/AdminUsersPage';
+import AdminReportsPage from './pages/admin/AdminReportsPage';
 import AdminMessagesPage from './pages/admin/AdminMessagesPage';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertCircle, X } from 'lucide-react';
@@ -77,11 +78,7 @@ function App() {
           {/* Admin Routes */}
           <Route path="/admin" element={<ProtectedRoute adminOnly><AdminDashboardPage /></ProtectedRoute>} />
           <Route path="/admin/users" element={<ProtectedRoute adminOnly><AdminUsersPage /></ProtectedRoute>} />
-          <Route path="/admin/reports" element={
-            <ProtectedRoute adminOnly>
-              <div className="pt-20 text-center">Reports (prossimamente)</div>
-            </ProtectedRoute>
-          } />
+          <Route path="/admin/reports" element={<ProtectedRoute adminOnly><AdminReportsPage /></ProtectedRoute>} />
           <Route path="/admin/messages" element={<ProtectedRoute adminOnly><AdminMessagesPage /></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>

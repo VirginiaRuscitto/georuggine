@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { Users, Activity, MessageSquare, Radio } from 'lucide-react';
+import { Users, Activity, MessageSquare, Radio, BarChart3 } from 'lucide-react';
 import Navbar from '../../components/layout/Navbar';
 import AnimatedBackground from '../../components/ui/AnimatedBackground';
 import GlassCard from '../../components/ui/GlassCard';
@@ -16,10 +16,7 @@ interface DashboardStats {
   totalMessages: number;
 }
 
-// Palette distinta per identificare i percorsi sulla mappa
 const TRACK_COLORS = ['#38bdf8', '#34d399', '#fbbf24', '#f472b6', '#a78bfa'];
-
-// Quanti percorsi mostrare in mappa contemporaneamente
 const MAX_TRACKED_USERS = 3;
 
 export default function AdminDashboardPage() {
@@ -44,7 +41,7 @@ export default function AdminDashboardPage() {
         totalUsers: users.length,
         activeUsers: active,
         movingUsers: moving,
-        totalMessages: 0, // TODO: endpoint conteggio
+        totalMessages: 0,
       });
 
       return users as any[];
@@ -54,8 +51,6 @@ export default function AdminDashboardPage() {
     }
   }, []);
 
-  // Seleziona fino a MAX_TRACKED_USERS utenti da tracciare, dando priorità
-  // a chi è in movimento, poi a chi è comunque attivo.
   const pickUsersToTrack = (users: any[]) => {
     const moving = users.filter((u) => u.state === 'moving');
     const stopped = users.filter((u) => u.state === 'stopped');
@@ -146,6 +141,15 @@ export default function AdminDashboardPage() {
       border: 'border-purple-400/20',
       path: '/admin/messages',
     },
+    {
+      title: 'Report',
+      value: '→',
+      icon: <BarChart3 size={18} />,
+      color: 'text-rose-400',
+      bg: 'bg-rose-400/10',
+      border: 'border-rose-400/20',
+      path: '/admin/reports',
+    },
   ];
 
   return (
@@ -154,7 +158,6 @@ export default function AdminDashboardPage() {
       <Navbar />
 
       <div className="relative z-10 flex-1 min-h-0 pt-20 pb-6 px-6 flex flex-col gap-4">
-        {/* Header compatto */}
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -167,8 +170,7 @@ export default function AdminDashboardPage() {
           </div>
         </motion.div>
 
-        {/* Stats compatte */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 flex-shrink-0">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 flex-shrink-0">
           {cards.map((card, i) => (
             <GlassCard
               key={card.title}
@@ -194,7 +196,6 @@ export default function AdminDashboardPage() {
           ))}
         </div>
 
-        {/* Mappa flotta: occupa tutto lo spazio rimanente, nessuno scroll */}
         <div className="flex-1 min-h-0">
           <FleetMapView tracks={tracks} loading={mapLoading} />
         </div>
