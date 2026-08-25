@@ -274,15 +274,22 @@ pub fn init_csv_files(
     positions_path: &str,
     messages_path: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    create_if_missing(positions_path)?;
-    create_if_missing(messages_path)?;
+    // IMPORTANTE: ogni run di bake_simulation deve ripartire da file puliti.
+    // Se non si azzerano qui, un secondo run (con destinazioni casuali diverse)
+    // si accumula sulle righe del run precedente. `replay.rs` raggruppa gli
+    // eventi solo per user_id e li ordina per offset_ms, quindi due run diversi
+    // mescolati insieme vengono rispediti via MQTT quasi simultaneamente pur
+    // rappresentando due percorsi scollegati: il sintomo è una posizione che
+    // "teletrasporta" l'utente da una parte all'altra della città in pochi
+    // millisecondi (visto nel report admin).
+    truncate_file(positions_path)?;
+    truncate_file(messages_path)?;
     Ok(())
 }
 
-fn create_if_missing(path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if !Path::new(path).exists() {
-        std::fs::File::create(path)?;
-    }
+fn truncate_file(path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // File::create tronca il file se esiste già, o lo crea se non esiste.
+    std::fs::File::create(path)?;
     Ok(())
 }
 
