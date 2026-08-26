@@ -50,7 +50,11 @@ pub enum ReportPeriod {
 pub struct RouteReport {
     pub user_id: i64,
     pub period: ReportPeriod,
-    pub trajectory: Vec<Position>,
+    /// Una lista di posizioni per ogni sessione di movimento nel periodo.
+    /// Le posizioni di sessioni diverse NON vanno mai unite in un'unica
+    /// traiettoria continua: sessioni diverse possono corrispondere a
+    /// spostamenti in luoghi/momenti scollegati tra loro.
+    pub segments: Vec<Vec<Position>>,
     pub avg_speed_kmh: f64,
     pub movement_duration_secs: i64,
     pub pause_duration_secs: i64,

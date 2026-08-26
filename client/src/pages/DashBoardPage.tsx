@@ -34,7 +34,7 @@ export default function DashboardPage() {
 
   const fetchOwnTrajectory = useCallback(async () => {
     try {
-      const res = await api.get<TrajectoryPoint[]>('/api/me/positions', { params: { period: 'day' } });
+      const res = await api.get<TrajectoryPoint[]>('/api/me/positions');
       setTrajectory(res.data || []);
     } catch (e: any) {
       console.error('Errore fetch tragitto:', e.response?.status, e.response?.data || e.message);

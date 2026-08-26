@@ -15,7 +15,7 @@ export default function RegisterForm() {
   const [success, setSuccess] = useState('');
   const { login } = useAuth();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
@@ -30,6 +30,10 @@ export default function RegisterForm() {
       });
       login(response.data.token);
       setSuccess('Registrazione completata!');
+      setName('');
+      setSurname('');
+      setEmail('');
+      setPassword('');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Errore durante la registrazione');
     } finally {

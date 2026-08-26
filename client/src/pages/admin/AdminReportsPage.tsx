@@ -9,7 +9,6 @@ import {
   User,
   CircleAlert,
   CircleCheck,
-  Shield,
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import { Icon } from 'leaflet';
@@ -45,11 +44,14 @@ interface Position {
 interface RouteReport {
   user_id: number;
   period: Period;
-  trajectory: Position[];
+  segments: Position[][]; // un array di posizioni per ogni sessione di movimento
   avg_speed_kmh: number;
   movement_duration_secs: number;
   pause_duration_secs: number;
 }
+
+// Colori usati per distinguere visivamente le sessioni di movimento sulla mappa
+const SEGMENT_COLORS = ['#e5e5e5', '#38bdf8', '#f472b6', '#a3e635', '#fb923c', '#c084fc'];
 
 // ----------------------------------------------------------------
 // Icone marker Leaflet
@@ -172,7 +174,9 @@ export default function AdminReportsPage() {
 
   const fetchUsers = async () => {
     try {
-      const res = await api.get('/api/users');
+      // Il report ha senso solo per i camionisti: chiediamo al backend solo
+      // i non-admin invece di scaricarli tutti e filtrare lato client.
+      const res = await api.get('/api/users?is_admin=false');
       setUsers(res.data || []);
     } catch (e) {
       console.error('Errore fetch users:', e);
@@ -224,13 +228,35 @@ export default function AdminReportsPage() {
     }
   };
 
-  const trajectoryPoints: [number, number][] = useMemo(() => {
-    if (!report || report.trajectory.length === 0) return [];
-    return report.trajectory.map((p) => [p.lat, p.lon]);
+  // Un array di coordinate per ogni sessione di movimento: ogni sessione viene
+  // disegnata come una Polyline separata, così non si crea mai una linea che
+  // "teletrasporta" da una sessione all'altra (es. tratte in città diverse).
+  const segmentPoints: [number, number][][] = useMemo(() => {
+    if (!report) return [];
+    return report.segments
+      .filter((seg) => seg.length > 0)
+      .map((seg) => seg.map((p) => [p.lat, p.lon] as [number, number]));
+  }, [report]);
+
+  // Tutti i punti insieme, usati solo per calcolare i bounds della mappa
+  const allPoints: [number, number][] = useMemo(() => segmentPoints.flat(), [segmentPoints]);
+
+  // Primo punto in assoluto (per il marker di partenza)
+  const firstPosition: Position | null = useMemo(() => {
+    if (!report) return null;
+    const firstSeg = report.segments.find((s) => s.length > 0);
+    return firstSeg ? firstSeg[0] : null;
+  }, [report]);
+
+  // Ultimo punto in assoluto (per il marker di arrivo/ultima posizione)
+  const lastPosition: Position | null = useMemo(() => {
+    if (!report) return null;
+    const lastSeg = [...report.segments].reverse().find((s) => s.length > 0);
+    return lastSeg ? lastSeg[lastSeg.length - 1] : null;
   }, [report]);
 
   const mapCenter: [number, number] =
-    trajectoryPoints.length > 0 ? trajectoryPoints[0] : DEFAULT_POS;
+    allPoints.length > 0 ? allPoints[0] : DEFAULT_POS;
 
   return (
     <div className="min-h-screen relative">
@@ -319,12 +345,6 @@ export default function AdminReportsPage() {
                             <span className="truncate">
                               {u.name && u.surname ? `${u.name} ${u.surname}` : u.username}
                             </span>
-                            {u.is_admin && (
-                              <span className="ml-auto text-[10px] uppercase tracking-wide text-amber-400 flex items-center gap-1">
-                                <Shield size={10} />
-                                Admin
-                              </span>
-                            )}
                           </button>
                         ))
                       )}
@@ -450,58 +470,52 @@ export default function AdminReportsPage() {
                   url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                 />
 
-                {trajectoryPoints.length >= 2 && (
-                  <Polyline
-                    positions={trajectoryPoints}
-                    pathOptions={{ color: '#e5e5e5', weight: 3, opacity: 0.85 }}
-                  />
+                {/* Una Polyline per ogni sessione di movimento: niente linee che
+                    collegano tratte lontane appartenenti a sessioni diverse */}
+                {segmentPoints.map((pts, i) =>
+                  pts.length >= 2 ? (
+                    <Polyline
+                      key={`seg-${i}`}
+                      positions={pts}
+                      pathOptions={{
+                        color: SEGMENT_COLORS[i % SEGMENT_COLORS.length],
+                        weight: 3,
+                        opacity: 0.85,
+                      }}
+                    />
+                  ) : null
                 )}
 
-                {trajectoryPoints.length >= 1 && (
-                  <>
-                    <Marker
-                      position={trajectoryPoints[0]}
-                      icon={startIcon}
-                    >
-                      <Popup>
-                        <div className="text-neutral-900">
-                          <p className="font-semibold">Partenza</p>
-                          <p className="text-xs">
-                            {formatTimestamp(report!.trajectory[0].recorded_at)}
-                          </p>
-                          <p className="text-xs">
-                            Lat: {trajectoryPoints[0][0].toFixed(5)} · Lon:{' '}
-                            {trajectoryPoints[0][1].toFixed(5)}
-                          </p>
-                        </div>
-                      </Popup>
-                    </Marker>
-                    {trajectoryPoints.length > 1 && (
-                      <Marker
-                        position={trajectoryPoints[trajectoryPoints.length - 1]}
-                        icon={endIcon}
-                      >
-                        <Popup>
-                          <div className="text-neutral-900">
-                            <p className="font-semibold">Ultima posizione</p>
-                            <p className="text-xs">
-                              {formatTimestamp(
-                                report!.trajectory[report!.trajectory.length - 1].recorded_at,
-                              )}
-                            </p>
-                            <p className="text-xs">
-                              Lat:{' '}
-                              {trajectoryPoints[trajectoryPoints.length - 1][0].toFixed(5)} · Lon:{' '}
-                              {trajectoryPoints[trajectoryPoints.length - 1][1].toFixed(5)}
-                            </p>
-                          </div>
-                        </Popup>
-                      </Marker>
-                    )}
-                  </>
+                {firstPosition && (
+                  <Marker position={[firstPosition.lat, firstPosition.lon]} icon={startIcon}>
+                    <Popup>
+                      <div className="text-neutral-900">
+                        <p className="font-semibold">Partenza</p>
+                        <p className="text-xs">{formatTimestamp(firstPosition.recorded_at)}</p>
+                        <p className="text-xs">
+                          Lat: {firstPosition.lat.toFixed(5)} · Lon:{' '}
+                          {firstPosition.lon.toFixed(5)}
+                        </p>
+                      </div>
+                    </Popup>
+                  </Marker>
                 )}
 
-                {trajectoryPoints.length === 0 && (
+                {lastPosition && lastPosition !== firstPosition && (
+                  <Marker position={[lastPosition.lat, lastPosition.lon]} icon={endIcon}>
+                    <Popup>
+                      <div className="text-neutral-900">
+                        <p className="font-semibold">Ultima posizione</p>
+                        <p className="text-xs">{formatTimestamp(lastPosition.recorded_at)}</p>
+                        <p className="text-xs">
+                          Lat: {lastPosition.lat.toFixed(5)} · Lon: {lastPosition.lon.toFixed(5)}
+                        </p>
+                      </div>
+                    </Popup>
+                  </Marker>
+                )}
+
+                {allPoints.length === 0 && (
                   <Marker position={DEFAULT_POS} icon={baseIcon}>
                     <Popup>
                       <div className="text-neutral-900">
@@ -515,7 +529,7 @@ export default function AdminReportsPage() {
                   </Marker>
                 )}
 
-                <MapFitter points={trajectoryPoints} />
+                <MapFitter points={allPoints} />
               </MapContainer>
             </div>
 
@@ -533,6 +547,11 @@ export default function AdminReportsPage() {
                 <span className="w-6 h-0.5 bg-neutral-300" />
                 Tragitto
               </span>
+              {report && segmentPoints.length > 1 && (
+                <span className="text-muted">
+                  {segmentPoints.length} sessioni di movimento nel periodo (colori diversi)
+                </span>
+              )}
             </div>
           </GlassCard>
         </div>

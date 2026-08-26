@@ -5,14 +5,47 @@ use crate::state::{ActiveUsers, UserSession};
 use chrono::{DateTime, Utc};
 use rumqttc::{AsyncClient, Event, EventLoop, Packet, QoS};
 use serde::Deserialize;
+use std::env;
+use std::sync::OnceLock;
 use crate::dao::{messages_dao, movement_sessions_dao, position_log_dao};
 use crate::handlers::messages;
 use crate::mqtt::outbound;
 
-pub const STALE_AFTER_SECS: i64 = 180;
+const DEFAULT_STALE_AFTER_SECS: i64 = 180;
+const DEFAULT_DISCONNECT_AFTER_SECS: i64 = 120;
 pub const COORD_EPSILON: f64 = 0.0001;
-pub const DISCONNECT_AFTER_SECS: i64 = 120;
 const MIN_MESSAGE_INTERVAL_SECS: i64 = 1;
+
+/// Secondi senza cambio di coordinate prima di passare a `Stopped`.
+///
+/// Configurabile con la variabile d'ambiente `STALE_AFTER_SECS`: il default
+/// di produzione (180s) assume GPS reali in tempo reale. Se stai facendo un
+/// replay/simulazione accelerata (`speed_factor` > 1 in `replay.rs`), 180
+/// secondi REALI possono non passare mai prima che la simulazione decida di
+/// ripartire, e la sessione resta `moving` per sempre. In quel caso lancia
+/// il server con una soglia più bassa, es. `STALE_AFTER_SECS=15`.
+pub fn stale_after_secs() -> i64 {
+    static VALUE: OnceLock<i64> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        env::var("STALE_AFTER_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_STALE_AFTER_SECS)
+    })
+}
+
+/// Secondi senza NESSUN aggiornamento (di qualsiasi tipo) prima di considerare
+/// l'utente disconnesso e chiudere la sessione. Configurabile con
+/// `DISCONNECT_AFTER_SECS`, stesso discorso di `stale_after_secs`.
+pub fn disconnect_after_secs() -> i64 {
+    static VALUE: OnceLock<i64> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        env::var("DISCONNECT_AFTER_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_DISCONNECT_AFTER_SECS)
+    })
+}
 
 #[derive(Deserialize)]
 pub struct PositionUpdatePayload {
@@ -83,7 +116,7 @@ fn check_state_transition(
 ) -> Option<(UserState, DateTime<Utc>)> {
     if moved {
         Some((UserState::Moving, now))
-    } else if now.signed_duration_since(last_coord_change_at).num_seconds() >= STALE_AFTER_SECS {
+    } else if now.signed_duration_since(last_coord_change_at).num_seconds() >= stale_after_secs() {
         Some((UserState::Stopped, last_coord_change_at))
     } else {
         None
@@ -246,13 +279,13 @@ pub async fn stale_state_watcher(active: ActiveUsers, db: SharedDb, mqtt_client:
         {
             let mut users = active.write().unwrap();
             users.retain(|&user_id, session| {
-                if now.signed_duration_since(session.last_seen_at).num_seconds() >= DISCONNECT_AFTER_SECS {
+                if now.signed_duration_since(session.last_seen_at).num_seconds() >= disconnect_after_secs() {
                     became_disconnected.push((user_id, session.last_seen_at));
                     return false;
                 }
 
                 if session.state == UserState::Moving
-                    && now.signed_duration_since(session.last_coord_change_at).num_seconds() >= STALE_AFTER_SECS
+                    && now.signed_duration_since(session.last_coord_change_at).num_seconds() >= stale_after_secs()
                 {
                     session.state = UserState::Stopped;
                     session.last_change_at = session.last_coord_change_at;

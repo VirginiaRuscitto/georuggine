@@ -23,19 +23,92 @@ pub struct ReportQuery {
     pub period: ReportPeriod,
 }
 
-#[derive(Deserialize)]
-pub struct SelfReportQuery {
-    pub period: ReportPeriod,
-}
-
+/// GET /api/report?user_id=&period=  (solo admin)
 pub async fn get_report_handler(State(state): State<AppState>, Query(params): Query<ReportQuery>) -> Response {
     build_report(&state, params.user_id, params.period).await
 }
 
+/// Costruisce il report di un utente per il periodo richiesto.
+///
+/// Punto chiave: le posizioni vengono raggruppate per sessione di movimento
+/// (`MovementSession`) invece che restituite come un unico elenco piatto.
+/// Questo evita che il frontend disegni una linea che collega due sessioni
+/// scollegate tra loro (es. una tratta a Torino e una a Milano nello stesso
+/// giorno), e allo stesso tempo evita che il calcolo della velocità media
+/// sommi la distanza "fantasma" tra la fine di una sessione e l'inizio della
+/// successiva.
+async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> Response {
+    let (start, end) = get_start_end_from_report_period(period);
+
+    let sessions = match movement_sessions_dao::get_sessions_in_range(&state.db, user_id, start, end) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("errore get_sessions_in_range: {e}");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile recuperare le sessioni di movimento",
+            );
+        }
+    };
+
+    let positions = match position_log_dao::get_positions_in_range(&state.db, user_id, start, end) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("errore get_positions_in_range: {e}");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile recuperare le posizioni",
+            );
+        }
+    };
+
+    let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, start, end);
+    let segments = build_segments(&sessions, &positions);
+    let avg_speed_kmh = compute_avg_speed_kmh(&segments, movement_duration_secs);
+
+    Json(RouteReport {
+        user_id,
+        period,
+        segments,
+        avg_speed_kmh,
+        movement_duration_secs,
+        pause_duration_secs,
+    })
+    .into_response()
+}
+
+/// Raggruppa le posizioni per sessione di movimento (solo sessioni "in
+/// movimento": le sessioni "stopped" non producono un segmento sulla mappa).
+/// Una posizione appartiene alla sessione se cade nell'intervallo
+/// `[started_at, ended_at)` della sessione (o `[started_at, now)` se la
+/// sessione è ancora aperta).
+fn build_segments(sessions: &[MovementSession], positions: &[Position]) -> Vec<Vec<Position>> {
+    let now = Utc::now();
+
+    sessions
+        .iter()
+        .filter(|s| s.state == MovementState::Moving)
+        .map(|session| {
+            let session_end = session.ended_at.unwrap_or(now);
+            positions
+                .iter()
+                .filter(|p| p.recorded_at >= session.started_at && p.recorded_at < session_end)
+                .copied()
+                .collect::<Vec<Position>>()
+        })
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
+/// GET /api/me/positions (utente autenticato, solo le sue posizioni per la mappa)
+///
+/// Ritorna le posizioni della **sessione corrente aperta** in `movement_sessions`.
+/// Se l'utente non ha una sessione aperta (disconnesso), la lista è vuota.
+/// Altrimenti restituisce tutte le posizioni da `started_at - 60s` della sessione
+/// aperta fino ad ora.
 pub async fn get_own_positions_handler(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Query(params): Query<SelfReportQuery>,
 ) -> Response {
     let session = match movement_sessions_dao::get_open_session_for_user(&state.db, claims.sub) {
         Ok(Some(s)) => s,
@@ -46,10 +119,10 @@ pub async fn get_own_positions_handler(
         }
     };
 
-    let (_, period_end) = get_start_end_from_report_period(params.period);
+    let now = Utc::now();
     let start = session.started_at - chrono::Duration::seconds(60);
 
-    let positions = match position_log_dao::get_positions_in_range(&state.db, claims.sub, start, period_end) {
+    let positions = match position_log_dao::get_positions_in_range(&state.db, claims.sub, start, now) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("errore get_positions_in_range: {e}");
@@ -58,49 +131,6 @@ pub async fn get_own_positions_handler(
     };
 
     Json(positions).into_response()
-}
-
-async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> Response {
-    let (start, end) = get_start_end_from_report_period(period);
-
-    match users_dao::get_user_by_id(&state.db, user_id) {
-        Ok(Some(_)) => {}
-        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
-        Err(e) => {
-            tracing::error!("errore get_user_by_id: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore del server");
-        }
-    };
-
-    let positions = match position_log_dao::get_positions_in_range(&state.db, user_id, start, end) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!("errore get_positions_in_range: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile calcolare il tragitto");
-        }
-    };
-
-    let sessions = match movement_sessions_dao::get_sessions_in_range(&state.db, user_id, start, end) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("errore get_sessions_in_range: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile calcolare le durate del movimento e delle pause");
-        }
-    };
-
-    let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, start, end);
-    let avg_speed_kmh = compute_avg_speed_kmh(&positions, movement_duration_secs);
-
-    let report = RouteReport {
-        user_id,
-        period,
-        trajectory: positions,
-        avg_speed_kmh,
-        movement_duration_secs,
-        pause_duration_secs,
-    };
-
-    Json(report).into_response()
 }
 
 pub fn get_start_end_from_report_period(report_period: ReportPeriod) -> (DateTime<Utc>, DateTime<Utc>) {
@@ -153,17 +183,31 @@ pub fn haversine_distance_km(p1: &Position, p2: &Position) -> f64 {
     EARTH_RADIUS_KM * c
 }
 
-pub fn compute_avg_speed_kmh(positions: &[Position], movement_duration_secs: i64) -> f64 {
-    if positions.len() < 2 || movement_duration_secs <= 0 {
+/// Calcola la velocità media sommando SOLO le distanze tra punti consecutivi
+/// che appartengono alla STESSA sessione di movimento (`segments` è già
+/// raggruppato per sessione da `build_segments`). Non viene mai calcolata
+/// una distanza tra l'ultimo punto di un segmento e il primo del successivo,
+/// quindi una "sessione fantasma" (es. tratte in città diverse) non può più
+/// gonfiare la velocità media.
+pub fn compute_avg_speed_kmh(segments: &[Vec<Position>], movement_duration_secs: i64) -> f64 {
+    if movement_duration_secs <= 0 {
         return 0.0;
     }
 
     const MAX_GAP_SECS: i64 = 90;
+    const MIN_SEGMENT_DISTANCE_KM: f64 = 0.005; // 5 metri: ignora rumore GPS
 
-    let total_distance_km: f64 = positions
-        .windows(2)
-        .filter(|pair| (pair[1].recorded_at - pair[0].recorded_at).num_seconds() <= MAX_GAP_SECS)
-        .map(|pair| haversine_distance_km(&pair[0], &pair[1]))
+    let total_distance_km: f64 = segments
+        .iter()
+        .flat_map(|segment| segment.windows(2))
+        .filter_map(|pair| {
+            let gap = (pair[1].recorded_at - pair[0].recorded_at).num_seconds();
+            if !(gap > 0 && gap <= MAX_GAP_SECS) {
+                return None;
+            }
+            let distance = haversine_distance_km(&pair[0], &pair[1]);
+            (distance >= MIN_SEGMENT_DISTANCE_KM).then_some(distance) // ignora rumore GPS < 5m
+        })
         .sum();
 
     let total_hours = movement_duration_secs as f64 / 3600.0;
