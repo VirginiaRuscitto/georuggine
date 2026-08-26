@@ -32,7 +32,7 @@ TODO compatibilità
 | sysinfo | Permette di raccogliere informazioni sull'utilizzo della CPU da parte del processo. |
 | futures | Fornisce `catch_unwind`, utilizzato per intercettare eventuali panic nei task eseguiti in background e registrarli nei log invece di lasciarli terminare senza essere segnalati. |
 
-TODO stack del frontend
+TODO stack del frontend e della demo
 
 ### 1.3 Struttura del database
 
@@ -61,13 +61,15 @@ Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separat
   npm run dev
   ```
 
+TODO avvio della demo
+
 TODO dimensione applicazione 
 
 ## 2. Aspetti trasversali del server
 
 ### 2.1 Variabili d'ambiente
 
-All'avvio dell'applicazione, `main.rs` carica tramite `dotenvy` il file `.env`. L'unica variabile d'ambiente presente è `JWT_SECRET`, utilizzato dal modulo di autenticazione per la firma e la verifica dei token JWT.
+All'avvio dell'applicazione, `main.rs` carica tramite `dotenvy` il file `.env`. Le variabili d'ambiente presenti sono `JWT_SECRET`, utilizzata dal modulo di autenticazione per la firma e la verifica dei token JWT, e le soglie `STALE_AFTER_SECS` e  `DISCONNECT_AFTER_SECS`, che determinano dopo quanti secondi senza variazioni delle coordinate un utente viene considerato rispettivamente fermo e disconnesso.
 
 ### 2.2 Modelli dei dati (models.rs)
 
@@ -162,11 +164,11 @@ Quando viene rilevata una variazione dello stato, sia `handle_position_update` c
 
 ## 6. Reportistica (handlers/report.rs)
 
-La reportistica permette di analizzare il movimento di un utente su un intervallo temporale definito, ricostruendo il tragitto percorso e calcolandone le principali informazioni.
+La reportistica permette di analizzare il movimento di un utente su un intervallo temporale definito, ricostruendo i tragitti percorsi e calcolandone le principali informazioni.
 
-La generazione del report viene gestita da `get_report_handler`, che riceve l'identificativo dell'utente per il quale si vuole effettuare l'analisi e il periodo da considerare. La funzione `get_start_end_from_report_period` determina quindi l'intervallo temporale corrispondente al periodo richiesto: per il giorno considera la giornata corrente, per la settimana considera la settimana corrente a partire da lunedì e per il mese considera il mese corrente. L'intervallo termina sempre all'istante in cui viene richiesto il report. Dopo aver verificato che l'utente esista, `get_report_handler` recupera le posizioni registrate per quell'utente nell'intervallo tramite `get_positions_in_range` e le sessioni di movimento e di pausa tramite `get_sessions_in_range`.
+La generazione del report viene gestita da `get_report_handler`, che riceve l'identificativo dell'utente per il quale si vuole effettuare l'analisi e il periodo da considerare e delega la costruzione del risultato a `build_report`. La funzione `get_start_end_from_report_period` determina quindi l'intervallo temporale corrispondente al periodo richiesto: per il giorno considera la giornata corrente, per la settimana considera la settimana corrente a partire da lunedì e per il mese considera il mese corrente. L'intervallo termina sempre all'istante in cui viene richiesto il report. Dopo aver verificato che l'utente esista, `build_report` recupera le posizioni registrate per quell'utente nell'intervallo tramite `get_positions_in_range` e le sessioni di movimento e di pausa tramite `get_sessions_in_range`.
 
-A partire dalle posizioni recuperate viene ricostruito il tragitto dell'utente e viene calcolata la velocità media tramite `compute_avg_speed_kmh`. La funzione considera le coppie consecutive di posizioni e ne calcola la distanza geografica tramite `haversine_distance_km`, sommando le distanze ottenute e rapportandole alla durata complessiva del movimento. Le coppie di posizioni separate da più di 90 secondi vengono escluse dal calcolo, poiché considerate non contigue e potenzialmente riconducibili a una disconnessione. Le durate del movimento e delle pause vengono invece calcolate da `compute_durations` a partire dalle `MovementSession`, sommando separatamente la durata delle sessioni `Moving` e `Stopped` all'interno dell'intervallo richiesto.
+A partire dalle sessioni e dalle posizioni recuperate, `build_segments` raggruppa le posizioni all'interno delle rispettive sessioni `Moving`, escludendo le sessioni `Stopped`. In questo modo il tragitto viene rappresentato come una sequenza di segmenti distinti e non viene collegata artificialmente la fine di una sessione con l'inizio di quella successiva. La velocità media viene quindi calcolata da `compute_avg_speed_kmh` considerando solo le coppie consecutive appartenenti allo stesso segmento. Per ogni coppia la distanza geografica viene calcolata tramite `haversine_distance_km`; vengono escluse le coppie con un intervallo superiore a 90 secondi e quelle con una distanza inferiore a 5 metri, considerate rispettivamente non contigue e rumore GPS. La velocità ottenuta viene rapportata alla durata complessiva delle sessioni `Moving`. Le durate del movimento e delle pause vengono invece calcolate da `compute_durations` a partire dalle `MovementSession`, sommando separatamente la durata delle sessioni `Moving` e `Stopped` e considerando solo la parte di ciascuna sessione compresa nell'intervallo richiesto.
 
 Inoltre, la funzione `get_own_positions_handler` permette agli utenti autenticati di recuperare le proprie posizioni relative alla sessione di movimento attualmente aperta, considerando un intervallo che parte da 60 secondi prima dell’inizio della sessione e termina al momento della richiesta.
 
@@ -392,12 +394,17 @@ Se ti interessa io nel corso di applicazioni web avevo fatto "componenti princip
     {
       "user_id": 1,
       "period": "day",
-      "trajectory": [
+      "segments": [
         {
           "lat": 45.0703,
           "lon": 7.6869,
           "recorded_at": "2026-06-20T14:30:45Z"
-        }
+        },
+        {
+          "lat": 45.0721,
+          "lon": 7.6895,
+          "recorded_at": "2026-06-20T14:31:20Z"
+        },
       ],
       "avg_speed_kmh": 42.5,
       "movement_duration_secs": 3600,
@@ -409,8 +416,6 @@ Se ti interessa io nel corso di applicazioni web avevo fatto "componenti princip
   - Response 404 Not Found: `{"error": "Utente non trovato"}`
   - Response 500 Internal Server Error: `{"error": "Errore del server"}` oppure `{"error": "Impossibile calcolare il tragitto"}` oppure `{"error": "Impossibile calcolare le durate del movimento e delle pause"}`
 - **GET `/api/me/positions`**
-  - Query parameters:
-    - `period`
   - Response 200 OK:
     ```json
     [
@@ -428,7 +433,6 @@ Se ti interessa io nel corso di applicazioni web avevo fatto "componenti princip
     ```
   - Response 401 Unauthorized: `{"error": "L'utente non ha effettuato l'accesso"}`
   - Response 500 Internal Server Error: `{"error": "Impossibile recuperare la sessione"}` oppure `{"error": "Impossibile recuperare le posizioni"}`
-
 
 ### 9.2 MQTT
 
