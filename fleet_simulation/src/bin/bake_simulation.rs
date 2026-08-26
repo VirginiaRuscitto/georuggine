@@ -17,6 +17,7 @@ use reqwest::{Client, Error};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use futures::future::join_all;
 use tokio;
@@ -293,10 +294,29 @@ fn truncate_file(path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sy
     Ok(())
 }
 
+/// Lock globale che serializza TUTTE le scritture sui file CSV.
+///
+/// `simulate_user_movement` gira in un `tokio::spawn` per ogni utente, e più
+/// task scrivono nello stesso file (`positions.csv` / `messages.csv`)
+/// concorrentemente. Senza questo lock, il controllo "il file è vuoto?" +
+/// apertura + scrittura dell'header non è atomico: più task possono vedere
+/// il file ancora vuoto nello stesso istante e scrivere l'header ciascuno,
+/// producendo un CSV con più header intervallati a righe di dati (che poi
+/// manda in errore `replay.rs` con un ParseIntError sulla colonna user_id).
+fn csv_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn append_record<T: Serialize>(
     path: &str,
     record: &T,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Tiene il lock per l'intera sezione critica: controllo "file vuoto?",
+    // apertura in append e scrittura, così due task non possono mai
+    // decidere entrambi di scrivere l'header.
+    let _guard = csv_write_lock().lock().unwrap();
+
     let file_is_empty = !Path::new(path).exists() || std::fs::metadata(path)?.len() == 0;
     let file = OpenOptions::new().create(true).append(true).open(path)?;
     let mut wtr = WriterBuilder::new()
