@@ -61,7 +61,28 @@ Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separat
   npm run dev
   ```
 
-TODO avvio della demo
+- **Demo**
+
+  ```bash
+  # 0. una tantum: avvia via Docker l'istanza locale di OSRM su localhost:5000
+  ./setup_osrm.sh          # oppure, su Windows: .\setup_osrm.ps1
+  
+  # 1. una tantum: genera l'elenco delle destinazioni (kebab di Torino)
+  MAPS_API_KEY="your_actual_api_key" cargo run --bin find_kebabs
+  
+  # 2. crea 20 utenti di test (password Password123! per tutti)
+  cargo run --bin create_users
+  
+  # 3. genera i tragitti simulati per 60 minuti (richiede OSRM avviato al passo 0)
+  cargo run --bin bake_simulation 60
+  
+  # 4. riproduce la simulazione via MQTT a velocità normale (1x)
+  cargo run --bin replay
+  ```
+
+  Al termine, il database del server risulterà popolato con posizioni, sessioni di movimento e messaggi realistici per tutti gli utenti di test, utilizzabili per verificare manualmente report, mappe e messaggistica lato admin.
+
+  > Attenzione: se bake_simulation è già stato runnato e quindi i file "position.csv" e "messages.csv" sono già stati popolati basterà runnare ``` cargo run --bin replay ```
 
 TODO dimensione applicazione 
 
