@@ -35,7 +35,12 @@ pub fn close_movement_session_for_user(db: &SharedDb, user_id: i64, ended_at: Da
 pub fn transition_session(db: &SharedDb, user_id: i64, new_state: MovementState, at: DateTime<Utc>) -> Result<i64> {
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
-    tx.execute("UPDATE movement_sessions SET ended_at = ?1 WHERE user_id = ?2 AND ended_at IS NULL", params![at, user_id])?;
+        tx.execute(
+        "UPDATE movement_sessions
+        SET ended_at = ?1
+        WHERE user_id = ?2 AND ended_at IS NULL AND started_at <= ?1",
+        params![at, user_id],
+    )?;
     tx.execute("INSERT INTO movement_sessions (user_id, state, started_at) VALUES (?1, ?2, ?3)", params![user_id, new_state, at])?;
     let id = tx.last_insert_rowid();
     tx.commit()?;

@@ -40,6 +40,15 @@ pub async fn get_report_handler(State(state): State<AppState>, Query(params): Qu
 async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> Response {
     let (start, end) = get_start_end_from_report_period(period);
 
+    match users_dao::get_user_by_id(&state.db, user_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
+        Err(e) => {
+            tracing::error!("errore get_user_by_id: {e}");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore del server");
+        }
+    }
+
     let sessions = match movement_sessions_dao::get_sessions_in_range(&state.db, user_id, start, end) {
         Ok(s) => s,
         Err(e) => {

@@ -9,8 +9,8 @@ mod mqtt;
 mod state;
 mod tls;
 
-use tower_http::cors::{Any, CorsLayer};
-use axum::http::{Method, header};
+use tower_http::cors::{CorsLayer};
+use axum::http::{Method, header, HeaderValue};
 use axum::Router;
 use rumqttc::{AsyncClient, MqttOptions, TlsConfiguration, Transport};
 use std::collections::HashMap;
@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Connessione al broker MQTT (in TLS, porta 8883) ---
     let mut mqttoptions = MqttOptions::new("georuggine_server", "broker.emqx.io", MQTT_TLS_PORT);
-    mqttoptions.set_keep_alive(std::time::Duration::from_secs(5));
+    mqttoptions.set_keep_alive(std::time::Duration::from_secs(40));
     mqttoptions.set_transport(Transport::Tls(TlsConfiguration::Simple {
         ca: BROKER_CA_CERT.to_vec(),
         alpn: None,
@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let cors = CorsLayer::new()
-        .allow_origin(Any) //TODO togliere any
+        .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
         .allow_methods([
             Method::GET,
             Method::POST,

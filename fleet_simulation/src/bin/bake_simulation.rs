@@ -24,7 +24,7 @@ use tokio;
 
 #[path = "../osrm.rs"]
 mod osrm;
-use osrm::SimulatoreVeicolo;
+use osrm::VehicleSimulator;
 
 const POSITIONS_CSV: &str = "positions.csv";
 const MESSAGES_CSV: &str = "messages.csv";
@@ -132,7 +132,7 @@ async fn simulate_user_movement(
         let origin_lon_lat = (current_origin.1, current_origin.0);
         let destination_lon_lat = (current_destination.1, current_destination.0);
 
-        let mut simulator = SimulatoreVeicolo::nuovo(
+        let mut simulator = VehicleSimulator::new(
             &user.id.to_string(),
             origin_lon_lat,
             destination_lon_lat,
@@ -143,7 +143,7 @@ async fn simulate_user_movement(
             if simulated_elapsed_ms >= simulation_duration_ms {
                 println!(
                     "[{}] Simulation time limit reached ({} min)",
-                    simulator.id_veicolo(),
+                    simulator.vehicle_id(),
                     simulation_duration_ms / 60_000
                 );
                 return Ok(());
@@ -151,7 +151,7 @@ async fn simulate_user_movement(
 
             simulated_elapsed_ms += TICK_SECONDS * 1_000;
 
-            match simulator.prossima_posizione(TICK_SECONDS as f64) {
+            match simulator.next_position(TICK_SECONDS as f64) {
                 Some(pos) => {
                     last_pos = (pos.lat, pos.lon);
                     add_position(
@@ -165,7 +165,7 @@ async fn simulate_user_movement(
                     )?;
                     println!(
                         "[{}] {:?}  (sim +{} ms)",
-                        simulator.id_veicolo(), pos, simulated_elapsed_ms
+                        simulator.vehicle_id(), pos, simulated_elapsed_ms
                     );
                 }
                 None => {
@@ -178,7 +178,7 @@ async fn simulate_user_movement(
                         1 => {
                             println!(
                                 "[{}] Destination reached: {}  (sim +{} ms)",
-                                simulator.id_veicolo(),
+                                simulator.vehicle_id(),
                                 current_destination_name,
                                 simulated_elapsed_ms
                             );
