@@ -497,7 +497,149 @@ Se ti interessa io nel corso di applicazioni web avevo fatto "componenti princip
       "error": "Coordinate non valide"
     }
     ```
-
 ## 10. Demo
 
-TODO dire anche degli script nel bin per gli utenti e i messaggi e che tutti gli utenti hanno la psw Password123!
+### 10.0 Elenco dei file
+Per popolare il sistema con dati realistici e verificarne il funzionamento end-to-end (registrazione utenti, invio posizioni via MQTT, invio messaggi, generazione dei report) è disponibile un piccolo progetto Rust separato, organizzato come una serie di binari (`src/bin/*.rs`) più due moduli di libreria condivisi (`mqtt.rs`, `osrm.rs`). Questi script non fanno parte del server, ma agiscono da **client di simulazione**: creano utenti reali tramite le API REST del server, generano tragitti realistici su rete stradale e riproducono via MQTT il traffico che normalmente verrebbe generato da veicoli reali.
+
+> **Importante:** tutti gli utenti creati dagli script di simulazione (compreso l'admin usato per autenticarsi) hanno la password `Password123!`. È necessario che questa password coincida con quella già presente nel database del server (o che l'utente admin venga creato con questa password), altrimenti le chiamate a `/api/login` effettuate dagli script falliscono.
+
+| File | A cosa serve |
+| --- | --- |
+| `find_kebabs.rs` | Interroga Google Places e genera `kebab_torino_google.csv`, l'elenco delle destinazioni usate nella simulazione. |
+| `create_users.rs` | Crea 20 utenti di test tramite `POST /api/register`, tutti con password `Password123!`. |
+| `bake_simulation.rs` | Precalcola i tragitti di tutti gli utenti (via OSRM) e li salva in `positions.csv` e `messages.csv`. |
+| `replay.rs` | Legge `positions.csv` e `messages.csv` e reinvia gli eventi al server via MQTT rispettando la timeline originale. |
+| `osrm.rs` | Modulo condiviso che interroga OSRM per calcolare tragitti reali su strada e ne simula l'avanzamento nel tempo. |
+| `mqtt.rs` | Modulo condiviso che gestisce la connessione TLS al broker MQTT e la pubblicazione di posizioni/messaggi. |
+| `setup_osrm.sh` | Script Bash (Linux/macOS/WSL) che avvia via Docker l'istanza locale di OSRM necessaria a `bake_simulation.rs`. |
+| `setup_osrm.ps1` | Equivalente PowerShell nativo dello script precedente, per Windows senza WSL. |
+
+Questi quattro script sono pensati per essere eseguiti in sequenza:
+
+```
+find_kebabs   -->  create_users  -->  bake_simulation  -->  replay
+(dataset)          (utenti)           (genera i CSV)        (invia via MQTT)
+```
+
+### 10.1 `find_kebabs.rs` — generazione del dataset di destinazioni
+
+Script una tantum che interroga le **Google Places API** (endpoint `nearbysearch`) cercando locali con la parola chiave "kebab" in un raggio di 10 km dal centro di Torino (coordinate `45.0703, 7.6869`). Gestisce la paginazione dei risultati tramite `next_page_token` (con la pausa di 2 secondi richiesta da Google prima di poter riutilizzare il token) e scrive il risultato in `kebab_torino_google.csv`, con colonne `name`, `lat`, `lon`.
+
+Questo file rappresenta l'insieme dei punti di interesse che gli utenti simulati raggiungeranno a turno durante la simulazione (funge quindi da elenco di "destinazioni plausibili" sparse sulla città, non da funzionalità del prodotto). Va eseguito una sola volta: il CSV prodotto viene poi riutilizzato da `bake_simulation`. Richiede una API key di Google Maps valida.
+
+### 10.2 `create_users.rs` — creazione degli utenti di test
+
+Effettua il login come amministratore (`admin@example.com` / `Password123!`) su `POST /api/login`, quindi chiama `POST /api/register` per creare 20 utenti di test con nomi e cognomi italiani predefiniti (es. `marco.rossi@example.com`). Tutti vengono creati con `is_admin: false` e password `Password123!`, la stessa richiesta da tutti gli altri script della demo.
+
+Usa `danger_accept_invalid_certs(true)` sul client HTTPS perché in ambiente di sviluppo il server espone un certificato self-signed generato con `mkcert` (coerentemente con quanto descritto nel §2.5.1); questa opzione non deve mai essere usata verso un server pubblico con certificato valido.
+
+### 10.3 `bake_simulation.rs` — generazione dei tragitti simulati
+
+È lo script più corposo: **non invia nulla in tempo reale**, ma pre-calcola ("bake", da cui il nome) un'intera simulazione e la salva su disco in due file CSV, che verranno poi effettivamente inviati al server da `replay.rs`. Si esegue con:
+
+```bash
+cargo run --bin bake_simulation <MINUTI>
+```
+
+dove `<MINUTI>` è la durata (simulata, non reale) della simulazione, di default 60 minuti se omesso.
+
+Funzionamento:
+
+1. Effettua il login come admin e recupera tramite `GET /api/users` l'elenco di tutti gli utenti non amministratori presenti sul server (quelli creati da `create_users.rs`).
+2. Legge `kebab_torino_google.csv` come elenco di destinazioni possibili.
+3. Per ciascun utente, avvia un task asincrono indipendente (`tokio::spawn`) che simula un percorso: origine e destinazione iniziali vengono scelte casualmente tra i kebab del CSV, e il tragitto reale tra i due punti viene calcolato interrogando un'istanza locale di **OSRM** (`http://localhost:5000`, vedi §10.5) tramite il modulo `osrm.rs`.
+4. Il movimento viene campionato ogni `TICK_SECONDS` (30 secondi simulati) e ogni posizione intermedia viene scritta come riga in `positions.csv`.
+5. Quando un utente raggiunge la destinazione, lo script sceglie casualmente (1 possibilità su 15) tra tre comportamenti: registrare l'arrivo con un messaggio "destinazione raggiunta" in `messages.csv` e ripartire verso un nuovo kebab scelto a caso; oppure fermarsi per una pausa di 120 secondi (simulati) registrando un messaggio "pausa di 120 secondi"; oppure restare fermo nella posizione corrente per un altro tick. Questo produce un mix di soste e spostamenti più realistico di un semplice tragitto continuo.
+6. La simulazione per ogni utente termina quando il tempo simulato trascorso raggiunge i minuti richiesti da riga di comando.
+
+Entrambi i CSV (`positions.csv`, `messages.csv`) vengono azzerati (`init_csv_files`) all'avvio di ogni run, in modo da non mescolare dati di esecuzioni diverse: `replay.rs` raggruppa e ordina gli eventi solo per `user_id` e offset temporale, quindi righe residue di un run precedente causerebbero "teletrasporti" dell'utente da un capo all'altro della città. Per lo stesso motivo, tutte le scritture sui due file passano da un unico lock globale (`csv_write_lock`), necessario perché più utenti vengono simulati in parallelo e la scrittura dell'header CSV non è altrimenti atomica.
+
+Ogni riga dei due CSV include, oltre ai dati di posizione/messaggio, anche `user_id` **ed `email`**, così da permettere a `replay.rs` di autenticarsi direttamente senza bisogno di consultare di nuovo il server, e i due campi `elapsed_from_start_ms` / `elapsed_from_last_ms`, usati rispettivamente per ricostruire la timeline assoluta e per calcolare gli intervalli tra un evento e il successivo.
+
+### 10.4 `replay.rs` — invio della simulazione via MQTT
+
+Legge `positions.csv` e `messages.csv` (di default nella cartella corrente, oppure percorsi passati da riga di comando) e reinvia tutti gli eventi al server rispettando, per ciascun utente, la stessa sequenza temporale con cui sono stati generati da `bake_simulation`:
+
+```bash
+cargo run --bin replay                              # velocità normale (1x, consigliata)
+cargo run --bin replay -- 15                         # 15x più veloce, solo per debug
+cargo run --bin replay -- 15 positions.csv messages.csv
+```
+
+Il primo argomento opzionale è uno `speed_factor`: gli offset temporali letti dal CSV vengono divisi per questo valore, permettendo di comprimere una simulazione di ore in pochi minuti reali.
+
+> **Importante:** lo `speed_factor` serve solo per il debug, ad esempio per verificare rapidamente che un'intera simulazione venga riprodotta correttamente senza dover attendere il tempo reale corrispondente. Una simulazione pensata per essere effettivamente utilizzata (report, demo, verifica del comportamento del server con un carico realistico) va invece eseguita a velocità normale (`speed_factor = 1`, cioè senza passare l'argomento). Velocità più alte comprimono gli intervalli tra gli eventi al di sotto di quanto previsto dal comportamento reale di un utente (ad es. il rate limit di 1 messaggio/secondo lato server, vedi §10.6), quindi possono produrre messaggi scartati o non rispettare il vincolo di una position log ogni 30 secondi.
+
+Per ogni utente presente nei CSV, lo script:
+
+1. Raggruppa posizioni e messaggi in un'unica lista di eventi ordinata per `elapsed_from_start_ms` (i due tipi di file vengono quindi fusi e non più trattati separatamente).
+2. Effettua il login (`POST /api/login`) usando l'email presente nella riga CSV e la password `Password123!`, ottenendo un JWT fresco (i token non vengono quindi salvati nei CSV, solo l'email).
+3. Apre una connessione MQTT dedicata verso `broker.emqx.io:8883` tramite `initialize_mqtt_client` (modulo `mqtt.rs`, §10.6).
+4. Attende il tempo necessario a rispettare l'offset del prossimo evento rispetto a un cronometro locale (`Instant`), quindi pubblica l'evento (`send_position` o `send_message`) con il token appena ottenuto. Se l'invio accumula più di una soglia di ritardo, lo stampa a log come avviso ("Behind schedule").
+
+Ogni utente viene gestito da un task `tokio::spawn` indipendente, quindi tutti gli utenti vengono "riprodotti" in parallelo, esattamente come erano stati generati.
+
+### 10.5 Dipendenza da OSRM
+
+`osrm.rs` (usato solo da `bake_simulation`) non è un binario a sé ma un modulo condiviso che genera tragitti realistici su strada invece di semplici linee rette tra due coordinate. Richiede un'istanza locale del progetto **OSRM** (Open Source Routing Machine) raggiungibile su `http://localhost:5000`, con il profilo di routing per auto e i dati OSM dell'area di Torino già caricati. Per ogni coppia origine/destinazione, `get_route` interroga l'endpoint `/route/v1/driving/...` con `annotations=speed`, ottenendo sia la geometria del percorso sia la velocità stimata segmento per segmento (in mancanza di un'annotazione valida viene usata una velocità di fallback di 35 km/h). `VehicleSimulator` mantiene poi lo stato di avanzamento lungo questi segmenti e restituisce una posizione interpolata ogni volta che `next_position(dt_sec)` viene chiamato, finché il tragitto non è esaurito.
+
+Questa istanza locale non viene avviata dagli script Rust: va predisposta a parte tramite Docker, come descritto nel paragrafo seguente.
+
+### 10.5.1 `setup_osrm.sh` / `setup_osrm.ps1` — avvio dell'istanza OSRM locale
+
+Sono due script di infrastruttura (uno per Linux/macOS/WSL in Bash, uno equivalente per Windows in PowerShell nativo) che preparano ed avviano, tramite **Docker**, l'istanza OSRM richiesta da `bake_simulation.rs`. Non fanno parte della pipeline Rust e vanno eseguiti manualmente **una sola volta**, prima di lanciare `bake_simulation`, dalla cartella in cui si vuole conservare l'estratto della mappa:
+
+```bash
+# Linux / macOS / WSL / Git Bash
+./setup_osrm.sh
+```
+
+```powershell
+# Windows, PowerShell nativo (non richiede WSL)
+.\setup_osrm.ps1
+```
+
+Eseguono la stessa sequenza di passi, usando l'immagine ufficiale `ghcr.io/project-osrm/osrm-backend`:
+
+1. **Verifica Docker** — controllano che il Docker daemon sia in esecuzione (`docker info`), interrompendosi con un errore chiaro in caso contrario.
+2. **Download dell'estratto OSM** — scaricano da BBBike (`download.bbbike.org`) l'estratto `Turin.osm.pbf`, cioè la sola rete stradale del comune di Torino (circa 13 MB), evitando così di scaricare l'estratto regionale Geofabrik "nord-ovest" molto più pesante (400+ MB). Se il file è già presente non viene riscaricato; viene inoltre verificato che la dimensione superi una soglia minima (5 MB), per accorgersi se al posto del `.pbf` è stata scaricata per errore una pagina di errore HTML.
+3. **`osrm-extract`** — costruisce il grafo della rete stradale a partire dal `.pbf`, usando il profilo `car.lua` (routing per auto).
+4. **`osrm-partition`** — partiziona il grafo secondo l'algoritmo **MLD** (Multi-Level Dijkstra), l'algoritmo di routing raccomandato di default da OSRM.
+5. **`osrm-customize`** — completa la preparazione dei dati per MLD.
+6. **Avvio del server di routing** — lanciano un container Docker persistente (`--restart unless-stopped`, nome `osrm`) che espone `osrm-routed --algorithm mld` sulla porta `5000`, la stessa interrogata da `osrm.rs` (`http://localhost:5000/route/v1/driving/...`).
+
+Al termine, entrambi gli script stampano un comando di verifica rapida (una chiamata di test all'endpoint `/route/v1/driving`) e i comandi Docker utili per la gestione successiva del container (`docker logs osrm`, `docker stop osrm`, `docker start osrm`); una volta processati i dati con `extract`/`partition`/`customize`, riavviare il container con `docker start osrm` non richiede di rieseguire l'intera pipeline.
+
+> **Nota:** trattandosi di un estratto limitato al solo comune di Torino, qualsiasi tragitto richiesto a OSRM che esca dal relativo bounding box (ad es. verso comuni limitrofi) fallisce con un errore `NoRoute`. Per coprire un'area più ampia è sufficiente sostituire l'URL dell'estratto (`PBF_URL` / `$PbfUrl`) con quello di un estratto regionale Geofabrik (es. "nord-ovest"), tenendo presente che le fasi di `extract`/`partition`/`customize` richiederanno più tempo e spazio su disco.
+
+### 10.6 Modulo `mqtt.rs`
+
+Modulo condiviso da `replay.rs` (e riutilizzabile da eventuali altri publisher esterni) che incapsula la connessione MQTT via TLS al broker pubblico `broker.emqx.io` sulla porta `8883`, usando il certificato CA del broker incluso a compile-time nel binario. Espone tre funzioni:
+
+- `initialize_mqtt_client`: crea l'`AsyncClient` e avvia in background un task che effettua il polling continuo dell'eventloop (richiede quindi di essere chiamata da un contesto già dentro un runtime Tokio).
+- `send_position`: pubblica su `georuggine/client/{user_id}/position` con `QoS::AtMostOnce`, coerentemente con quanto documentato in §9.2 per questo topic.
+- `send_message`: pubblica su `georuggine/client/{user_id}/message` con `QoS::AtLeastOnce`.
+
+In entrambi i casi il payload include il JWT dell'utente (claim `sub` corrispondente a `user_id`): il server scarta silenziosamente i messaggi in cui i due valori non coincidono, per impedire che un utente autenticato invii dati a nome di un altro (comportamento descritto anche in §2.5).
+
+### 10.7 Riepilogo: esecuzione completa della demo
+
+```bash
+# 0. una tantum: avvia via Docker l'istanza locale di OSRM su localhost:5000
+./setup_osrm.sh          # oppure, su Windows: .\setup_osrm.ps1
+
+# 1. una tantum: genera l'elenco delle destinazioni (kebab di Torino)
+MAPS_API_KEY="your_actual_api_key" cargo run --bin find_kebabs
+
+# 2. crea 20 utenti di test (password Password123! per tutti)
+cargo run --bin create_users
+
+# 3. genera i tragitti simulati per 60 minuti (richiede OSRM avviato al passo 0)
+cargo run --bin bake_simulation 60
+
+# 4. riproduce la simulazione via MQTT a velocità normale (1x)
+cargo run --bin replay
+```
+
+Al termine, il database del server risulterà popolato con posizioni, sessioni di movimento e messaggi realistici per tutti gli utenti di test, utilizzabili per verificare manualmente report, mappe e messaggistica lato admin.
