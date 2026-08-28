@@ -87,6 +87,33 @@ fn coords_changed(old_pos: Option<&Position>, new_pos: &Position) -> bool {
 }
 
 fn ensure_active_session(active: &ActiveUsers, db: &SharedDb, user_id: i64, now: DateTime<Utc>) {
+    // Se l'utente è presente in `active` ma è fermo da più di
+    // `disconnect_after_secs`, non possiamo aspettare il prossimo tick di
+    // `stale_state_watcher` (ogni 10s) per accorgercene: se un nuovo
+    // aggiornamento arriva prima, la vecchia sessione verrebbe riutilizzata
+    // e il "salto" tra l'ultima posizione di allora e questa nuova verrebbe
+    // conteggiato come un unico spostamento continuo, falsando sia la
+    // durata di movimento sia la velocità media (e, a cascata, quale
+    // sessione risulta "la prima" nei report). Qui chiudiamo esplicitamente
+    // la sessione stale, al suo vero istante di fine (`last_seen_at`), e la
+    // rimuoviamo dalla mappa così che venga trattata come un utente nuovo.
+    let stale_last_seen = {
+        let users = active.read().unwrap();
+        users.get(&user_id).and_then(|s| {
+            let elapsed = now.signed_duration_since(s.last_seen_at).num_seconds();
+            (elapsed >= disconnect_after_secs()).then_some(s.last_seen_at)
+        })
+    };
+
+    if let Some(last_seen_at) = stale_last_seen {
+        active.write().unwrap().remove(&user_id);
+        if let Err(e) =
+            movement_sessions_dao::close_movement_session_for_user(db, user_id, last_seen_at)
+        {
+            tracing::error!("errore chiusura sessione stale per user {user_id}: {e}");
+        }
+    }
+
     let is_new = {
         let mut users = active.write().unwrap();
         let is_new = !users.contains_key(&user_id);
@@ -318,20 +345,8 @@ pub async fn start_mqtt_listener(
     active: ActiveUsers,
     mqtt_client: AsyncClient,
 ) {
-
-    if let Err(e) = mqtt_client
-        .subscribe("georuggine/client/+/position", QoS::AtMostOnce)
-        .await
-    {
-        tracing::error!("errore subscribe position: {e:?}");
-    }
-
-    if let Err(e) = mqtt_client
-        .subscribe("georuggine/client/+/message", QoS::AtLeastOnce)
-        .await
-    {
-        tracing::error!("errore subscribe message: {e:?}");
-    }
+    let _ = mqtt_client.subscribe("georuggine/client/+/position", QoS::AtMostOnce).await;
+    let _ = mqtt_client.subscribe("georuggine/client/+/message", QoS::AtLeastOnce).await;
 
     loop {
         match eventloop.poll().await {

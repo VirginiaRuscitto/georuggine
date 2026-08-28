@@ -40,16 +40,7 @@ pub async fn get_report_handler(State(state): State<AppState>, Query(params): Qu
 async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> Response {
     let (start, end) = get_start_end_from_report_period(period);
 
-    match users_dao::get_user_by_id(&state.db, user_id) {
-        Ok(Some(_)) => {}
-        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Utente non trovato"),
-        Err(e) => {
-            tracing::error!("errore get_user_by_id: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Errore del server");
-        }
-    }
-
-    let sessions = match movement_sessions_dao::get_sessions_in_range(&state.db, user_id, start, end) {
+    let mut sessions = match movement_sessions_dao::get_sessions_in_range(&state.db, user_id, start, end) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("errore get_sessions_in_range: {e}");
@@ -59,8 +50,16 @@ async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> R
             );
         }
     };
+    // Non ci fidiamo dell'ordine restituito dalla query: se per lo stesso
+    // utente esistono più sessioni nello stesso periodo (es. simulazioni
+    // ripetute senza attendere la disconnessione), il frontend individua la
+    // tappa di "partenza" prendendo il primo elemento di `segments`. Senza
+    // un ordinamento esplicito qui, quel primo elemento potrebbe non essere
+    // il primo in ordine cronologico, facendo apparire un punto di partenza
+    // diverso (e sbagliato) a seconda del periodo (giorno/settimana/mese).
+    sessions.sort_by_key(|s| s.started_at);
 
-    let positions = match position_log_dao::get_positions_in_range(&state.db, user_id, start, end) {
+    let mut positions = match position_log_dao::get_positions_in_range(&state.db, user_id, start, end) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("errore get_positions_in_range: {e}");
@@ -70,6 +69,10 @@ async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> R
             );
         }
     };
+    // Stesso discorso per le posizioni: `compute_avg_speed_kmh` assume che
+    // i punti dentro ogni segmento siano in ordine cronologico (usa
+    // `windows(2)` per calcolare le distanze tra punti consecutivi).
+    positions.sort_by_key(|p| p.recorded_at);
 
     let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, start, end);
     let segments = build_segments(&sessions, &positions);
