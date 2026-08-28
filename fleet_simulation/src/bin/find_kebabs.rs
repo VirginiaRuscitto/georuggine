@@ -29,10 +29,8 @@ struct Location {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // ⚠️ Inserisci qui la tua API Key di Google Maps
-    // api key abilitata solo per il mio indirizzo ip
-    // per runnare creare un progetto google cloud con l'abilitazione alle api di google places
-    let api_key = "AIzaSyBgQPId3Z598c-HHBOxKHBnh44fLNqcldg";
+    let api_key = std::env::var("MAPS_API_KEY")
+    .expect("MAPS_API_KEY environment variable not set");
 
     let client = reqwest::blocking::Client::new();
     let mut all_places: Vec<(String, f64, f64)> = Vec::new();
