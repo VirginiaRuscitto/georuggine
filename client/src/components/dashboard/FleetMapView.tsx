@@ -13,7 +13,8 @@ export interface FleetUserTrack {
   state: 'disconnected' | 'stopped' | 'moving';
 }
 
-const DEFAULT_CENTER: [number, number] = [45.0703, 7.6869]; // Torino default
+const DEFAULT_CENTER: [number, number] = [45.0703, 7.6869];
+const MAP_API_KEY = import.meta.env.VITE_MAP_API_KEY;
 
 function userIcon(color: string) {
   return new DivIcon({
@@ -68,10 +69,10 @@ export default function FleetMapView({ tracks, loading }: FleetMapViewProps) {
           className="w-full h-full rounded-xl"
           style={{ background: '#111' }}
         >
-          <TileLayer
-            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          />
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url={`https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=${MAP_API_KEY}`}
+        />
 
           {tracks.map((track) =>
             track.trajectory.length > 1 ? (

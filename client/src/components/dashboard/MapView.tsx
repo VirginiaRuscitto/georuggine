@@ -9,6 +9,8 @@ import GlassCard from '../ui/GlassCard';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
+const MAP_API_KEY = import.meta.env.VITE_MAP_API_KEY;
+
 const customIcon = new Icon({
   iconUrl: markerIcon,
   shadowUrl: markerShadow,
@@ -77,10 +79,10 @@ export default function MapView({ position, trajectory = [] }: MapViewProps) {
           className="w-full h-full rounded-xl"
           style={{ background: '#111' }}
         >
-          <TileLayer
-            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          />
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=${MAP_API_KEY}"
+        />
 
           {polylinePositions.length > 1 && (
             <Polyline

@@ -53,6 +53,8 @@ interface RouteReport {
 // Colori usati per distinguere visivamente le sessioni di movimento sulla mappa
 const SEGMENT_COLORS = ['#e5e5e5', '#38bdf8', '#f472b6', '#a3e635', '#fb923c', '#c084fc'];
 
+const MAP_API_KEY = import.meta.env.VITE_MAP_API_KEY;
+
 // ----------------------------------------------------------------
 // Icone marker Leaflet
 // ----------------------------------------------------------------
@@ -465,10 +467,10 @@ export default function AdminReportsPage() {
                 style={{ background: '#111' }}
                 key={report ? `${report.user_id}-${report.period}` : 'empty'}
               >
-                <TileLayer
-                  attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-                  url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-                />
+            <TileLayer
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                      url={`https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=${MAP_API_KEY}`}
+            />
 
                 {/* Una Polyline per ogni sessione di movimento: niente linee che
                     collegano tratte lontane appartenenti a sessioni diverse */}

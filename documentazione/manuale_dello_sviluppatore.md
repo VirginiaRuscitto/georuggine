@@ -31,8 +31,7 @@ TODO compatibilità
 | dotenvy | Carica dal file `.env` la variabile di configurazione del server JWT_SECRET. |
 | sysinfo | Permette di raccogliere informazioni sull'utilizzo della CPU da parte del processo. |
 | futures | Fornisce `catch_unwind`, utilizzato per intercettare eventuali panic nei task eseguiti in background e registrarli nei log invece di lasciarli terminare senza essere segnalati. |
-
-TODO stack del frontend e della demo
+| Vite + React + TypeScript | Frontend SPA, vedi §8.2 per il dettaglio completo. |
 
 ### 1.3 Struttura del database
 
@@ -190,9 +189,151 @@ Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto d
 
 ## 8. Frontend
 
-### 8.1
+### 8.1 Panoramica
 
-Se ti interessa io nel corso di applicazioni web avevo fatto "componenti principali" con una breve spiegazione e "pagine"
+Il frontend è un'applicazione web realizzata con **React 18**, **TypeScript** e **Vite**. L'interfaccia è organizzata in due aree distinte, con un design system basato su **Tailwind CSS** e componenti in stile *glassmorphism*.
+
+La comunicazione con il backend avviene principalmente tramite chiamate **HTTPS REST** (autenticazione, gestione utenti, report, storico messaggi). Per la messaggistica in tempo reale e l'invio della posizione da parte degli utenti viene invece utilizzato **MQTT over WebSocket** tramite il broker pubblico EMQX.
+
+### 8.2 Stack tecnico
+
+| Tecnologia | Utilizzo nel progetto |
+|---|---|
+| React 18 | Framework UI per la costruzione dell'interfaccia utente tramite componenti funzionali e hook. |
+| TypeScript | Tipizzazione statica di tutto il codice sorgente, inclusi modelli dati, props dei componenti e risposte API. |
+| Vite | Build tool e dev server; fornisce HMR rapido e bundling ottimizzato per la produzione (`npm run build`). |
+| React Router DOM | Gestione del routing lato client; le route protette verificano autenticazione e ruolo admin. |
+| Tailwind CSS | Utility-first CSS framework; il tema è personalizzato tramite direttive `@theme` con palette scura e variabili per il design glassmorphism. |
+| Framer Motion | Animazioni di entrata, transizioni tra pagine e micro-interazioni (hover, tap, scroll). |
+| Leaflet + React-Leaflet | Visualizzazione delle mappe interattive per il tracciamento della posizione singola e della flotta. |
+| Axios | Client HTTP per le chiamate REST al backend; configurato con interceptor per il JWT e gestione centralizzata degli errori. |
+| MQTT.js | Client MQTT che opera su WebSocket (`wss://broker.emqx.io:8084/mqtt`) per la pubblicazione di messaggi e posizioni in tempo reale. |
+| Lucide React | Libreria di icone utilizzata in tutta l'applicazione per garantire coerenza visiva. |
+
+### 8.3 Struttura del progetto
+
+Il codice sorgente è organizzato nella cartella `src/` secondo il seguente schema:
+
+```
+src/
+├── components/
+│   ├── auth/           # Form di login e registrazione
+│   ├── dashboard/      # Mappe (singola utente e flotta), sidebar utente
+│   ├── layout/         # Navbar con navigazione condizionale admin/user
+│   ├── messages/       # Sidebar conversazioni e finestra chat
+│   └── ui/             # Componenti riutilizzabili (GlassCard, FormInput, AnimatedBackground, ...)
+├── context/
+│   └── AuthContext.tsx # Gestione globale dello stato di autenticazione (JWT, ruolo, userId)
+├── hooks/
+│   └── useMqttClient.ts# Hook per la connessione e pubblicazione MQTT
+├── lib/
+│   └── api.ts          # Istanza Axios configurata con base URL, interceptor JWT e gestione errori
+├── pages/
+│   ├── AuthPage.tsx           # Pagina di accesso (login + registrazione affiancati)
+│   ├── DashboardPage.tsx      # Dashboard utente con mappa personale e stato
+│   ├── MessagesPage.tsx       # Messaggistica utente (admin e broadcast)
+│   └── admin/
+│       ├── AdminDashboardPage.tsx  # Panoramica flotta, stats e mappa multi-utente
+│       ├── AdminUsersPage.tsx      # Gestione, filtro, promozione e eliminazione utenti
+│       ├── AdminReportsPage.tsx    # Generazione report per singolo utente con mappa e metriche
+│       └── AdminMessagesPage.tsx   # Messaggistica admin (diretta e broadcast)
+├── types/              # Tipi TypeScript condivisi (User, messaggi, coordinate, ...)
+├── App.tsx             # Router principale, route protette e banner errori globali
+├── main.tsx            # Entry point con StrictMode
+└── index.css           # Tailwind + design system custom (glass, input, bottoni, griglia)
+```
+
+### 8.4 Design system e UI
+
+L'interfaccia utilizza un tema scuro uniforme basato su una palette di grigi profondi (`#050505` background, `#111` surface) con accenti bianchi e colori di stato (emerald per *moving*, amber per *stopped*, neutral per *disconnected*).
+
+I componenti fondamentali del design system sono:
+
+- **`GlassCard`**: contenitore con sfondo semi-trasparente, `backdrop-filter: blur`, bordo sottile e ombre stratificate. Supporta varianti (`default`, `hover`, `interactive`, `subtle`) per adattarsi a contesti diversi (card cliccabili, sidebar, chat).
+- **`AnimatedBackground`**: sfondo fisso con gradienti radiali animati (Framer Motion) e griglia sottile, applicato a tutte le pagine per dare profondità senza distrarre.
+- **`FormInput`** e **`glass-input`**: campi di input con icona, stile glass e stati focus con bordo luminoso.
+- **`btn-primary` / `btn-secondary`**: bottoni con stile pieno (bianco su nero) o outlined, usati rispettivamente per azioni principali e secondarie.
+
+### 8.5 Autenticazione e routing
+
+L'autenticazione è gestita interamente lato client tramite **JWT** memorizzato in `localStorage`. 
+
+L' `AuthContext`:
+- All'avvio legge il token, ne decodifica il payload (campi `sub`/`user_id`, `is_admin`) e inizializza lo stato globale.
+- Fornisce le funzioni `login(token)` e `logout()`.
+- Reindirizza automaticamente gli admin alla route `/admin` se tentano di accedere alla root `/`.
+
+Il routing in `App.tsx` protegge le route tramite il componente `ProtectedRoute`, che verifica `isAuthenticated` e, per le sezioni admin, il flag `isAdmin`. Le chiamate API che ricevono HTTP 401 attivano un interceptor che cancella il token e reindirizza al login.
+
+### 8.6 Comunicazione con il backend
+
+#### 8.6.1 API REST (`lib/api.ts`)
+
+Il modulo `api.ts` crea un'istanza Axios con:
+- `baseURL` letto dalla variabile d'ambiente `VITE_API_URL` (default: `https://127.0.0.1:3001`).
+- **Request interceptor**: aggiunge l'header `Authorization: Bearer <token>` se presente in `localStorage`.
+- **Response interceptor**: in caso di 401 effettua il logout automatico; per altri errori emette un evento globale `app-error` che viene visualizzato dal banner in `App.tsx`.
+
+#### 8.6.2 MQTT (`hooks/useMqttClient.ts`)
+
+L'hook `useMqttClient` gestisce una singola connessione MQTT over WebSocket verso `wss://broker.emqx.io:8084/mqtt`. Al mount crea un client con `clean: true`, riconnessione automatica ogni 5 secondi e keepalive di 60 secondi. Espone:
+
+- `connected`: stato della connessione.
+- `publish(topic, payload)`: serializza il payload in JSON e pubblica con QoS 1, restituendo una Promise booleana.
+
+L'hook viene utilizzato in `MessagesPage.tsx` per permettere agli utenti di inviare messaggi al server tramite il topic `georuggine/client/:user_id/message`, includendo nel payload il JWT per la verifica lato server.
+
+### 8.7 Pagine principali
+
+#### 8.7.1 Autenticazione (`AuthPage`)
+
+Pagina di ingresso non protetta. Presenta affiancati il form di login e quello di registrazione, separati da un divisore diagonale animato. Entrambi i form utilizzano `FormInput` con icone Lucide e validazione lato server; al successo del login il token viene salvato e l'utente reindirizzato alla dashboard appropriata.
+
+#### 8.7.2 Dashboard utente (`DashboardPage`)
+
+Layout a due colonne: sidebar sinistra (`UserSidebar`) con dati profilo, stato di movimento e coordinate; area destra (`MapView`) con mappa Leaflet in tema scuro (tile CARTO dark) che mostra la posizione corrente e la traiettoria della sessione aperta.
+
+Il polling avviene ogni 30 secondi: una chiamata a `/api/me` aggiorna lo stato, mentre `/api/me/positions` recupera le posizioni della sessione corrente. Quando l'utente passa da *disconnected* a online, la traiettoria precedente viene azzerata per ricominciare il tracciamento dalla nuova sessione.
+
+#### 8.7.3 Messaggistica utente (`MessagesPage`)
+
+Interfaccia chat con sidebar a sinistra (due voci fisse: *Admin* e *Broadcast*) e finestra conversazione a destra (`ChatWindow`). I messaggi vengono recuperati da `/api/messages` con polling ogni 5 secondi. L'invio verso l'admin utilizza MQTT (topic `georuggine/client/:user_id/message`); il canale broadcast è in sola lettura.
+
+#### 8.7.4 Dashboard admin (`AdminDashboardPage`)
+
+Panoramica della flotta in tempo reale. In alto sono visualizzate quattro card riassuntive (utenti totali, in movimento, attivi, link ai report) che navigano alle rispettive sezioni. L'area principale ospita `FleetMapView`, una mappa multi-utente che traccia fino a 4 veicoli selezionabili da un dropdown. Per ogni utente selezionato viene chiamato `/api/report?period=day` e le sessioni di movimento (`segments`) vengono appiattite in un'unica traiettoria colorata. Il refresh è configurabile (default 10 secondi).
+
+#### 8.7.5 Gestione utenti (`AdminUsersPage`)
+
+Pagina divisa in due pannelli: a sinistra il form per registrare nuovi utenti (anche admin) tramite `POST /api/admin/register`; a destra la lista utenti con ricerca testuale, filtri per ruolo e stato, toggle admin e eliminazione. Le azioni su sé stessi sono disabilitate. La lista è virtualmente scrollabile e mostra badge di ruolo, indicatore di stato e pulsanti azione.
+
+#### 8.7.6 Report (`AdminReportsPage`)
+
+Strumento di analisi per singolo utente. L'admin seleziona un utente da un dropdown con ricerca, sceglie la granularità (giorno/settimana/mese) e genera il report. Il risultato mostra:
+- **Metriche**: velocità media, tempo in movimento, tempo in pausa.
+- **Mappa**: una Polyline per ogni sessione di movimento (colori diversi per sessione), marker di partenza (verde) e ultima posizione (ambra).
+- **Legenda**: spiegazione dei colori e conteggio delle sessioni.
+
+#### 8.7.7 Messaggistica admin (`AdminMessagesPage`)
+
+Simile alla pagina utente ma con funzionalità estese: la sidebar mostra tutti gli utenti non-admin con indicatore di stato; l'admin può selezionare un utente per conversazione diretta (via `POST /api/messages/direct`) o il canale broadcast (via `POST /api/broadcast`). Lo storico viene aggiornato con polling ogni 3 secondi.
+
+### 8.8 Build e avvio
+
+Per l'ambiente di sviluppo:
+```bash
+cd client
+npm install
+npm run dev
+```
+
+Per la build di produzione:
+```bash
+npm run build
+```
+
+L'output viene generato nella cartella `dist/` e può essere servito da qualsiasi web server statico. Il backend HTTPS deve essere raggiungibile all'indirizzo configurato in `VITE_API_URL`.
+
 
 ## 9. API
 
