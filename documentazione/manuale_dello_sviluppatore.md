@@ -53,7 +53,7 @@ Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separat
 - **Backend**
   ```bash
   cd server
-  cargo run
+  cargo run --bin georuggine
   ```
 - **Frontend**
   ```bash

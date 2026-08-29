@@ -6,16 +6,16 @@ Georuggine è un'applicazione finalizzata alla gestione della geolocalizzazione 
 
 ## 2.Requisiti
 
-- sistemi operativi su cui deployamo TODO
+- Sistema operativo Windows o Linux
 - altre cose TODO
 
-## 3.Avvio app
+## 3.Avvio app (solo tester e sviluppatori)
 
 Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separatamente il backend e il frontend.
 - **Backend**
   ```bash
   cd server
-  cargo run
+  cargo run --bin georuggine
   ```
 - **Frontend**
   ```bash
