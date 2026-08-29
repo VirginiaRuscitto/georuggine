@@ -8,7 +8,7 @@ Il progetto è organizzato in due parti: client e server. Il client rappresenta 
 
 La comunicazione tra client e server utilizza protocolli diversi in base al tipo di operazione e di client. Le operazioni come l'autenticazione, la registrazione e la consultazione dello storico dei messaggi utilizzano HTTPS REST per entrambi i client. L'amministratore utilizza HTTPS per attività come la gestione degli utenti, la generazione dei report e l'invio di messaggi diretti o broadcast. Trattandosi di un client utilizzato da una postazione stabile, il modello richiesta-risposta di HTTPS si adatta bene alle interazioni con il server. Il client degli utenti utilizza invece MQTT, dovendo inviare periodicamente al server la propria posizione. La scelta è legata alla natura IoT del client, che può trovarsi in presenza di una connessione meno stabile. MQTT permette di gestire questo tipo di comunicazione senza dover effettuare una nuova richiesta HTTPS per ogni posizione e offrendo inoltre meccanismi di gestione e ritrasmissione dei messaggi. L'utilizzo di MQTT viene esteso anche alle altre comunicazioni del client utente, quali l'invio e la ricezione dei messaggi e la gestione delle notifiche relative ai cambiamenti di stato e agli errori. Questa scelta consente di mantenere un unico meccanismo di comunicazione, evitando di introdurre ulteriori protocolli e sfruttando un approccio coerente con la natura IoT del client.
 
-TODO compatibilità
+Il progetto è compatibile con le piattaforme Windows e Linux.
 
 ### 1.2 Stack tecnico
 
@@ -46,6 +46,8 @@ Note:
 - Lo stato "disconnesso" non è mai persistito: è rappresentato implicitamente dall'assenza dell'utente dalla mappa delle connessioni attive mantenuta in memoria dal server.
 
 ### 1.4 Avvio dell'applicazione e dimensione dell'eseguibile
+
+Per compilare ed eseguire il progetto sono necessari Rust e Cargo per il backend e Node.js con npm per il frontend. TODO (siamo sicuri per il frontend?) È inoltre necessario disporre di un broker MQTT per la comunicazione tra il server e i client.
 
 Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separatamente il backend e il frontend.
 - **Backend**

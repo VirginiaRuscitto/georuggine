@@ -345,8 +345,20 @@ pub async fn start_mqtt_listener(
     active: ActiveUsers,
     mqtt_client: AsyncClient,
 ) {
-    let _ = mqtt_client.subscribe("georuggine/client/+/position", QoS::AtMostOnce).await;
-    let _ = mqtt_client.subscribe("georuggine/client/+/message", QoS::AtLeastOnce).await;
+    
+    if let Err(e) = mqtt_client
+        .subscribe("georuggine/client/+/position", QoS::AtMostOnce)
+        .await
+    {
+        tracing::error!("errore subscribe position: {e:?}");
+    }
+
+    if let Err(e) = mqtt_client
+        .subscribe("georuggine/client/+/message", QoS::AtLeastOnce)
+        .await
+    {
+        tracing::error!("errore subscribe message: {e:?}");
+    }
 
     loop {
         match eventloop.poll().await {
