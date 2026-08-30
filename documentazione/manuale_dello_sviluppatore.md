@@ -47,7 +47,7 @@ Note:
 
 ### 1.4 Avvio dell'applicazione e dimensione dell'eseguibile
 
-Per compilare ed eseguire il progetto sono necessari Rust e Cargo per il backend e Node.js con npm per il frontend. TODO (siamo sicuri per il frontend?) È inoltre necessario disporre di un broker MQTT per la comunicazione tra il server e i client.
+Per compilare ed eseguire il progetto sono necessari Rust e Cargo per il backend e Node.js con npm per il frontend. È inoltre necessario disporre di un broker MQTT per la comunicazione tra il server e i client.
 
 Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separatamente il backend e il frontend.
 - **Backend**
@@ -200,7 +200,7 @@ Il sistema di messaggistica gestisce l'invio e la ricezione di messaggi diretti 
 
 ### 7.1 Invio e recupero dei messaggi tramite HTTPS
 
-Il modulo `messages.rs` espone le route dedicate alla messaggistica. `get_messages_handler` distingue innanzitutto il tipo di richiesta in base al ruolo dell'utente e al parametro `with`. Per un amministratore, `with` identifica l'utente con cui visualizzare la conversazione diretta; se non viene specificato, vengono invece recuperati i soli messaggi broadcast. Per un utente normale non è necessario specificare `with`, perché vengono recuperati automaticamente i messaggi diretti che lo riguardano insieme ai broadcast. Il parametro `limit` stabilisce il numero massimo di messaggi restituiti: se non viene specificato viene utilizzato il valore predefinito di 50. `clamp(1, MAX_LIMIT)` limita comunque il valore tra 1 e 200. La differenza nella gestione delle conversazioni rispecchia le esigenze delle due interfacce: . TODO chiedere a enzo il funzionamento per completare
+Il modulo `messages.rs` espone le route dedicate alla messaggistica. `get_messages_handler` distingue innanzitutto il tipo di richiesta in base al ruolo dell'utente e al parametro `with`. Per un amministratore, `with` identifica l'utente con cui visualizzare la conversazione diretta; se non viene specificato, vengono invece recuperati i soli messaggi broadcast. Per un utente normale non è necessario specificare `with`, perché vengono recuperati automaticamente i messaggi diretti che lo riguardano insieme ai broadcast. Il parametro `limit` stabilisce il numero massimo di messaggi restituiti: se non viene specificato viene utilizzato il valore predefinito di 50. `clamp(1, MAX_LIMIT)` limita comunque il valore tra 1 e 200. La differenza nella gestione delle conversazioni rispecchia le esigenze delle due interfacce: mentre l'amministratore ha le chat con tutti gli utenti, l'utente normale ha solo una chat con l'amministratore. 
 
 L'invio tramite HTTPS è invece riservato agli amministratori: `post_direct_message` verifica l'esistenza del destinatario, salva il messaggio nel database e ne notifica la ricezione tramite MQTT, mentre `post_broadcast_handler` salva e pubblica un messaggio destinato a tutti gli utenti. Entrambe le funzioni utilizzano `validate_content` per verificare che il messaggio non sia vuoto e non superi i 1000 caratteri. I messaggi vengono quindi prima persistiti nel database e solo successivamente notificati tramite MQTT, mantenendo lo storico disponibile anche nel caso in cui la pubblicazione MQTT non vada a buon fine.
 
@@ -215,8 +215,6 @@ Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto d
 ### 8.1 Panoramica
 
 Il frontend è un'applicazione web realizzata con **React 18**, **TypeScript** e **Vite**. L'interfaccia è organizzata in due aree distinte, con un design system basato su **Tailwind CSS** e componenti in stile *glassmorphism*.
-
-La comunicazione con il backend avviene principalmente tramite chiamate **HTTPS REST** (autenticazione, gestione utenti, report, storico messaggi). Per la messaggistica in tempo reale e l'invio della posizione da parte degli utenti viene invece utilizzato **MQTT over WebSocket** tramite il broker pubblico EMQX.
 
 ### 8.2 Stack tecnico
 
@@ -355,7 +353,7 @@ Per la build di produzione:
 npm run build
 ```
 
-L'output viene generato nella cartella `dist/` e può essere servito da qualsiasi web server statico. Il backend HTTPS deve essere raggiungibile all'indirizzo configurato in `VITE_API_URL`.
+L'output viene generato nella cartella `dist/` e può essere servito da qualsiasi web server statico. Il backend HTTPS deve essere raggiungibile all'indirizzo configurato in `VITE_API_URL`. TODO vedere che fare
 
 
 ## 9. API
