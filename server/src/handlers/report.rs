@@ -89,11 +89,6 @@ async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> R
     .into_response()
 }
 
-/// Raggruppa le posizioni per sessione di movimento (solo sessioni "in
-/// movimento": le sessioni "stopped" non producono un segmento sulla mappa).
-/// Una posizione appartiene alla sessione se cade nell'intervallo
-/// `[started_at, ended_at)` della sessione (o `[started_at, now)` se la
-/// sessione è ancora aperta).
 fn build_segments(sessions: &[MovementSession], positions: &[Position]) -> Vec<Vec<Position>> {
     let now = Utc::now();
 
@@ -102,11 +97,22 @@ fn build_segments(sessions: &[MovementSession], positions: &[Position]) -> Vec<V
         .filter(|s| s.state == MovementState::Moving)
         .map(|session| {
             let session_end = session.ended_at.unwrap_or(now);
-            positions
+            
+            let mut segment: Vec<Position> = positions
                 .iter()
                 .filter(|p| p.recorded_at >= session.started_at && p.recorded_at < session_end)
                 .copied()
-                .collect::<Vec<Position>>()
+                .collect();
+            
+            if let Some(prev_pos) = positions
+                .iter()
+                .filter(|p| p.recorded_at < session.started_at)
+                .max_by_key(|p| p.recorded_at)
+            {
+                segment.insert(0, *prev_pos);
+            }
+            
+            segment
         })
         .filter(|segment| !segment.is_empty())
         .collect()
