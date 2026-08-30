@@ -11,7 +11,7 @@ use chrono::{DateTime, Datelike, Days, NaiveDate, Utc};
 use serde::Deserialize;
 use crate::{
     auth::{self, Claims},
-    dao::{movement_sessions_dao, position_log_dao, users_dao},
+    dao::{movement_sessions_dao, position_log_dao},
     errors::error_response,
     models::{MovementSession, MovementState, Position, ReportPeriod, RouteReport},
     state::AppState,
