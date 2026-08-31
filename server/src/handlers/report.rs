@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, Query, State},
+    extract::{Extension, Query, Path, State},
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
@@ -151,6 +151,33 @@ pub async fn get_own_positions_handler(
     Json(positions).into_response()
 }
 
+pub async fn get_user_positions_handler(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+) -> Response {
+    let session = match movement_sessions_dao::get_open_session_for_user(&state.db, user_id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return Json(Vec::<Position>::new()).into_response(),
+        Err(e) => {
+            tracing::error!("errore get_open_session_for_user: {e}");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile recuperare la sessione");
+        }
+    };
+
+    let now = Utc::now();
+    let start = session.started_at - chrono::Duration::seconds(60);
+
+    let positions = match position_log_dao::get_positions_in_range(&state.db, user_id, start, now) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("errore get_positions_in_range: {e}");
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile recuperare le posizioni");
+        }
+    };
+
+    Json(positions).into_response()
+}
+
 pub fn get_start_end_from_report_period(report_period: ReportPeriod) -> (DateTime<Utc>, DateTime<Utc>) {
     let now = Utc::now();
     match report_period {
@@ -258,6 +285,7 @@ pub fn router() -> Router<AppState> {
 
 fn admin_router() -> Router<AppState> {
     Router::new()
+        .route("/api/admin/users/:user_id/positions", get(get_user_positions_handler))
         .route("/api/report", get(get_report_handler))
         .layer(middleware::from_fn(auth::jwt_admin_middleware))
 }

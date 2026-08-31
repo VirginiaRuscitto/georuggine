@@ -98,15 +98,8 @@ export default function AdminDashboardPage() {
       const results = await Promise.all(
         selected.map((u) =>
           api
-            .get('/api/report', { params: { user_id: u.id, period: 'day' } })
-            .then((res) => ({
-              user: u,
-              // Il backend restituisce `segments`: un array di posizioni per
-              // ogni sessione di movimento (non un'unica `trajectory` piatta).
-              // Qui li appiattiamo in un solo percorso per utente per la
-              // mini-mappa della dashboard.
-              trajectory: (res.data.segments || []).flat(),
-            }))
+            .get(`/api/admin/users/${u.id}/positions`)
+            .then((res) => ({ user: u, trajectory: res.data || [] }))
             .catch(() => ({ user: u, trajectory: [] }))
         )
       );
