@@ -722,6 +722,7 @@ Per popolare il sistema con dati realistici e verificarne il funzionamento end-t
 | `mqtt.rs` | Modulo condiviso che gestisce la connessione TLS al broker MQTT e la pubblicazione di posizioni/messaggi. |
 | `setup_osrm.sh` | Script Bash (Linux/macOS/WSL) che avvia via Docker l'istanza locale di OSRM necessaria a `bake_simulation.rs`. |
 | `setup_osrm.ps1` | Equivalente PowerShell nativo dello script precedente, per Windows senza WSL. |
+| `generate_report.rs` | Unico file che si trova nel crate `georuggine` permette di inserire direttamente nel db i dati di generati da `bake_simulation.rs` a partire da un timestamp specificato da linea di comando |
 
 ### 10.1 Funzionamento complessivo
 
@@ -749,7 +750,20 @@ Il primo argomento opzionale è uno `speed_factor`: gli offset temporali letti d
 
 > **Importante:** lo `speed_factor` serve solo per il debug, ad esempio per verificare rapidamente che un'intera simulazione venga riprodotta correttamente senza dover attendere il tempo reale corrispondente. Una simulazione pensata per essere effettivamente utilizzata (report, demo, verifica del comportamento del server con un carico realistico) va invece eseguita a velocità normale (`speed_factor = 1`, cioè senza passare l'argomento). Velocità più alte comprimono gli intervalli tra gli eventi al di sotto di quanto previsto dal comportamento reale di un utente (ad es. il rate limit di 1 messaggio/secondo lato server, vedi §10.6), quindi possono produrre messaggi scartati o non rispettare il vincolo di una position log ogni 30 secondi.
 
-### 10.4 Dipendenza da OSRM
+### 10.4 `generate_report.rs` — inserimento dei dati nel db
+
+Questo script permette di inserire nel database dati nel passato, simulando le attività degli utenti senza dover aspettare che avvengano in tempo reale, accedendo direttamente al database.
+
+Quindi per usarlo, da dentro la directory `G23/server`: 
+```bash
+cargo run --bin generate_report nome_file.csv timestamp
+```
+
+con il timestamp specificato in ISO 8601;
+
+Le posizioni contenute nel file csv sarannò inserite seguendo la timeline generata da `bake_simulation.rs`, a partire dal timestamp specificato.
+
+### 10.5 Dipendenza da OSRM
 
 `osrm.rs` (usato solo da `bake_simulation`) non è un binario a sé ma un modulo condiviso che genera tragitti realistici su strada invece di semplici linee rette tra due coordinate. Richiede un'istanza locale del progetto **OSRM** (Open Source Routing Machine) raggiungibile su `http://localhost:5000`.
 
