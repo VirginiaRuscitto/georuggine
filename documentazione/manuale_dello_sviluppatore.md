@@ -1,14 +1,14 @@
-# Manuale dello sviluppatore
+  # Manuale dello sviluppatore
 
 ## 1.Introduzione
 
 ### 1.1 Panoramica del progetto
 
-Il progetto è organizzato in due parti: client e server. Il client rappresenta l'applicazione utilizzata dagli utenti e dagli amministratori, mentre il server si occupa di coordinare la comunicazione tra i client, gestire gli utenti, le posizioni, gli stati, i messaggi e la memorizzazione dei dati. Gli amministratori, pur utilizzando client distinti, operano tutti in veste di server e rappresentano quindi un'unica entità nei confronti degli utenti. La comunicazione HTTPS del client web è inoltre gestita tramite CORS, che permette al client di effettuare richieste al server.
+Il progetto è organizzato in due parti: client e server. Il client rappresenta l'applicazione utilizzata dagli utenti e dagli amministratori, mentre il server si occupa di coordinare la comunicazione tra i client, gestire gli utenti, le posizioni, gli stati, i messaggi e la memorizzazione dei dati. Gli amministratori, pur utilizzando client distinti, operano tutti in veste di server e rappresentano quindi un'unica entità nei confronti degli utenti. La comunicazione HTTPS del client web è inoltre gestita tramite CORS, che consente al browser di effettuare richieste al server da un'origine differente.
 
 La comunicazione tra client e server utilizza protocolli diversi in base al tipo di operazione e di client. Le operazioni come l'autenticazione, la registrazione e la consultazione dello storico dei messaggi utilizzano HTTPS REST per entrambi i client. L'amministratore utilizza HTTPS per attività come la gestione degli utenti, la generazione dei report e l'invio di messaggi diretti o broadcast. Trattandosi di un client utilizzato da una postazione stabile, il modello richiesta-risposta di HTTPS si adatta bene alle interazioni con il server. Il client degli utenti utilizza invece MQTT, dovendo inviare periodicamente al server la propria posizione. La scelta è legata alla natura IoT del client, che può trovarsi in presenza di una connessione meno stabile. MQTT permette di gestire questo tipo di comunicazione senza dover effettuare una nuova richiesta HTTPS per ogni posizione e offrendo inoltre meccanismi di gestione e ritrasmissione dei messaggi. L'utilizzo di MQTT viene esteso anche alle altre comunicazioni del client utente, quali l'invio e la ricezione dei messaggi e la gestione delle notifiche relative ai cambiamenti di stato e agli errori. Questa scelta consente di mantenere un unico meccanismo di comunicazione, evitando di introdurre ulteriori protocolli e sfruttando un approccio coerente con la natura IoT del client.
 
-TODO compatibilità
+Il progetto è compatibile con le piattaforme Windows e Linux.
 
 ### 1.2 Stack tecnico
 
@@ -18,7 +18,7 @@ TODO compatibilità
 | Tokio | Runtime asincrono utilizzato per eseguire il server HTTPS e coordinare le attività in background, tra cui il listener MQTT, il controllo dello stato degli utenti e il logging periodico della CPU, permettendo di gestire queste operazioni in concorrenza senza bloccare il server. |
 | rusqlite | Libreria utilizzata per l'accesso al database SQLite. Sono state inoltre aggiunte le feature bundled e chrono. |
 | Axum | Framework utilizzato per sviluppare il server HTTPS e gestire le API REST del backend. |
-| tower-HTTPS | Fornisce il middleware CORS, utilizzato per gestire le richieste provenienti dal frontend. |
+| tower-http | Fornisce il middleware CORS, utilizzato per gestire le richieste provenienti dal frontend. |
 | jsonwebtoken | Generazione e verifica dei token JWT per autenticare gli utenti e proteggere le route che richiedono l'accesso autenticato o i privilegi di amministratore. |
 | serde/serde_json | Utilizzati per convertire le strutture dati Rust in JSON e viceversa, sia per i dati delle API REST sia per i messaggi MQTT. |
 | rumqttc | Gestisce la comunicazione MQTT con il broker, occupandosi della pubblicazione e della sottoscrizione ai topic utilizzati per la posizione, lo stato e la messaggistica in tempo reale. |
@@ -31,8 +31,7 @@ TODO compatibilità
 | dotenvy | Carica dal file `.env` la variabile di configurazione del server JWT_SECRET. |
 | sysinfo | Permette di raccogliere informazioni sull'utilizzo della CPU da parte del processo. |
 | futures | Fornisce `catch_unwind`, utilizzato per intercettare eventuali panic nei task eseguiti in background e registrarli nei log invece di lasciarli terminare senza essere segnalati. |
-
-TODO stack del frontend e della demo
+| Vite + React + TypeScript | Frontend SPA, vedi §8.2 per il dettaglio completo. |
 
 ### 1.3 Struttura del database
 
@@ -42,17 +41,19 @@ TODO stack del frontend e della demo
 - Tabella **messages** - (id (PK), sender_id (FK -> users.id, nullable), recipient_id (FK -> users.id, nullable), content, sent_at)
 
 Note:
-- Nella tabella `messages`, `sender_id` e `recipient_id` permettono di distinguere i diversi tipi di messaggio. Quando entrambi sono `NULL`, il messaggio viene inviato in brodcast dal server a tutti gli utenti. Se invece `sender_id` contiene l'ID di un utente e `recipient_id` è `NULL`, il messaggio è stato inviato da quell'utente al server. Al contrario, quando `sender_id` è `NULL` e `recipient_id` contiene l'ID di un utente, il messaggio è inviato dal server direttamente a quell'utente.
+- Nella tabella `messages`, `sender_id` e `recipient_id` permettono di distinguere i diversi tipi di messaggio. Quando entrambi sono `NULL`, il messaggio viene inviato in broadcast dal server a tutti gli utenti. Se invece `sender_id` contiene l'ID di un utente e `recipient_id` è `NULL`, il messaggio è stato inviato da quell'utente al server. Al contrario, quando `sender_id` è `NULL` e `recipient_id` contiene l'ID di un utente, il messaggio è inviato dal server direttamente a quell'utente.
 - `movement_sessions` è una tabella derivata che raccoglie le sessioni di movimento a partire dagli eventi di cambio stato. In questo modo, per generare i report non è necessario rielaborare ogni volta l'intero `position_log`. La tabella è inoltre indicizzata su (`user_id`, `started_at`) per velocizzare la ricerca delle sessioni di uno specifico utente che si sovrappongono all'intervallo richiesto.
 - Lo stato "disconnesso" non è mai persistito: è rappresentato implicitamente dall'assenza dell'utente dalla mappa delle connessioni attive mantenuta in memoria dal server.
 
 ### 1.4 Avvio dell'applicazione e dimensione dell'eseguibile
 
+Per compilare ed eseguire il progetto sono necessari Rust e Cargo per il backend e Node.js con npm per il frontend. È inoltre necessario disporre di un broker MQTT per la comunicazione tra il server e i client.
+
 Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separatamente il backend e il frontend.
 - **Backend**
   ```bash
   cd server
-  cargo run
+  cargo run --bin georuggine
   ```
 - **Frontend**
   ```bash
@@ -90,7 +91,7 @@ TODO dimensione applicazione
 
 ### 2.1 Variabili d'ambiente
 
-All'avvio dell'applicazione, `main.rs` carica tramite `dotenvy` il file `.env`. Le variabili d'ambiente presenti sono `JWT_SECRET`, utilizzata dal modulo di autenticazione per la firma e la verifica dei token JWT, e le soglie `STALE_AFTER_SECS` e  `DISCONNECT_AFTER_SECS`, che determinano dopo quanti secondi senza variazioni delle coordinate un utente viene considerato rispettivamente fermo e disconnesso.
+All'avvio dell'applicazione, `main.rs` carica tramite `dotenvy` il file `.env`. Le variabili d'ambiente presenti sono `JWT_SECRET`, utilizzata dal modulo di autenticazione per la firma e la verifica dei token JWT, e le soglie `STALE_AFTER_SECS` e `DISCONNECT_AFTER_SECS`, che determinano rispettivamente dopo quanti secondi senza variazioni delle coordinate un utente viene considerato fermo e dopo quanti secondi senza ricevere alcun aggiornamento (posizione o messaggio) viene considerato disconnesso.
 
 ### 2.2 Modelli dei dati (models.rs)
 
@@ -99,6 +100,7 @@ Il modulo `models.rs` definisce le principali strutture e enumerazioni utilizzat
 ### 2.3 Stato condiviso (state.rs)
 
 Lo stato condiviso dell'applicazione è raccolto nella struttura `AppState`, che contiene la connessione al database, il client MQTT e `ActiveUsers`, utilizzata per mantenere in memoria le informazioni sugli utenti attualmente connessi. `ActiveUsers` è definita come `Arc<RwLock<HashMap<i64, UserSession>>>`: `Arc` permette di condividere la struttura tra i diversi task asincroni, mentre `RwLock` ne consente l'accesso concorrente. La mappa utilizza l'identificativo dell'utente come chiave e associa a ciascuno una `UserSession` che contiene l'ultima posizione ricevuta, lo stato corrente e gli istanti dell'ultimo aggiornamento, dell'ultimo cambio di stato, dell'ultima variazione di coordinate e dell'ultimo messaggio accettato. Si sottolinea che lo stato `Disconnected` non viene memorizzato nel database, ma è rappresentato dall'assenza dell'utente da `ActiveUsers`. In questo modo le informazioni necessarie alla gestione in tempo reale rimangono in memoria, mentre nel database vengono persistiti solamente i dati che devono essere conservati.
+
 ### 2.4 Accesso al database e DAO (cartella dao, cartella database)
 
 L'accesso al database è organizzato tramite i moduli DAO presenti nella cartella `dao`, che espongono le funzioni utilizzate dal resto dell'applicazione per eseguire le operazioni di lettura e scrittura. I vari DAO seguono tutti lo stesso schema: ricevono la connessione condivisa al database e gli eventuali parametri, eseguono le query tramite `rusqlite` e restituiscono il risultato o un errore. 
@@ -107,7 +109,7 @@ La connessione al database è gestita nella cartella `database` dal modulo `conn
 
 Le operazioni `rusqlite` utilizzate dai DAO sono sincrone e vengono eseguite direttamente dagli handler asincroni e dai task MQTT. In caso di aumento significativo del carico, le operazioni bloccanti potrebbero essere isolate tramite `tokio::task::spawn_blocking`, evitando di occupare i worker di Tokio durante l'esecuzione delle query.
 
-### 2.5 Comunicazione HTTPSS e MQTT (cartella handlers, cartella mqtt, cartella certs, tls.rs)
+### 2.5 Comunicazione HTTPS e MQTT (cartella handlers, cartella mqtt, cartella certs, tls.rs)
 
 La comunicazione HTTPS è organizzata tramite route separate nei moduli della cartella `handlers`. Le route vengono poi raccolte nel `main.rs` tramite `Router::merge`. Le risorse protette utilizzano inoltre i middleware di autenticazione trattati nel capitolo sull'autenticazione. Il server HTTPS è esposto sulla porta `3001` e utilizza CORS per consentire le richieste provenienti dal client.
 
@@ -141,7 +143,7 @@ La registrazione degli utenti viene gestita da `register_handler`, che permette 
 
 ### 3.3 Token JWT e claims
 
-Una volta completata con successo la registrazione o il login, `generate_jwt` genera il token che verrà utilizzato dal client per autenticarsi nelle chiamate successive. Il token viene firmato tramite una chiave segreta recuperata dalla variabile d’ambiente `JWT_SECRET`; la funzione `jwt_secret` ne garantisce inoltre l’inizializzazione una sola volta tramite `OnceLock` e verifica che tale chiave sia presente e non vuota. el token vengono inseriti i `Claims`, composti dall’identificativo dell’utente (`sub`), dal relativo ruolo (`is_admin`) e dalla scadenza (`exp`), impostata a 24 ore dalla generazione. In questo modo, il JWT contiene tutte le informazioni necessarie per identificare e autorizzare l’utente nelle richieste successive, senza richiedere la gestione di una sessione lato server.
+Una volta completata con successo la registrazione o il login, `generate_jwt` genera il token che verrà utilizzato dal client per autenticarsi nelle chiamate successive. Il token viene firmato tramite una chiave segreta recuperata dalla variabile d’ambiente `JWT_SECRET`; la funzione `jwt_secret` ne garantisce inoltre l’inizializzazione una sola volta tramite `OnceLock` e verifica che tale chiave sia presente e non vuota. Nel token vengono inseriti i `Claims`, composti dall’identificativo dell’utente (`sub`), dal relativo ruolo (`is_admin`) e dalla scadenza (`exp`), impostata a 24 ore dalla generazione. In questo modo, il JWT contiene tutte le informazioni necessarie per identificare e autorizzare l’utente nelle richieste successive, senza richiedere la gestione di una sessione lato server.
 
 ### 3.4 Autenticazione e autorizzazione tramite middleware
 
@@ -185,13 +187,13 @@ Quando viene rilevata una variazione dello stato, sia `handle_position_update` c
 
 ## 6. Reportistica (handlers/report.rs)
 
-La reportistica permette di analizzare il movimento di un utente su un intervallo temporale definito, ricostruendo i tragitti percorsi e calcolandone le principali informazioni.
+La reportistica permette di analizzare il movimento di un utente su un intervallo temporale definito, ricostruendo i tragitti percorsi e calcolandone le principali informazioni. Il modulo permette inoltre il recupero delle posizioni della sessione di movimento di un utente attualmente aperta.
 
 La generazione del report viene gestita da `get_report_handler`, che riceve l'identificativo dell'utente per il quale si vuole effettuare l'analisi e il periodo da considerare e delega la costruzione del risultato a `build_report`. La funzione `get_start_end_from_report_period` determina quindi l'intervallo temporale corrispondente al periodo richiesto: per il giorno considera la giornata corrente, per la settimana considera la settimana corrente a partire da lunedì e per il mese considera il mese corrente. L'intervallo termina sempre all'istante in cui viene richiesto il report. Dopo aver verificato che l'utente esista, `build_report` recupera le posizioni registrate per quell'utente nell'intervallo tramite `get_positions_in_range` e le sessioni di movimento e di pausa tramite `get_sessions_in_range`.
 
-A partire dalle sessioni e dalle posizioni recuperate, `build_segments` raggruppa le posizioni all'interno delle rispettive sessioni `Moving`, escludendo le sessioni `Stopped`. In questo modo il tragitto viene rappresentato come una sequenza di segmenti distinti e non viene collegata artificialmente la fine di una sessione con l'inizio di quella successiva. La velocità media viene quindi calcolata da `compute_avg_speed_kmh` considerando solo le coppie consecutive appartenenti allo stesso segmento. Per ogni coppia la distanza geografica viene calcolata tramite `haversine_distance_km`; vengono escluse le coppie con un intervallo superiore a 90 secondi e quelle con una distanza inferiore a 5 metri, considerate rispettivamente non contigue e rumore GPS. La velocità ottenuta viene rapportata alla durata complessiva delle sessioni `Moving`. Le durate del movimento e delle pause vengono invece calcolate da `compute_durations` a partire dalle `MovementSession`, sommando separatamente la durata delle sessioni `Moving` e `Stopped` e considerando solo la parte di ciascuna sessione compresa nell'intervallo richiesto.
+A partire dalle sessioni e dalle posizioni recuperate, `build_segments` raggruppa le posizioni all'interno delle rispettive sessioni `Moving`, escludendo le sessioni `Stopped`. In questo modo il tragitto viene rappresentato come una sequenza di segmenti distinti e non viene collegata artificialmente la fine di una sessione con l'inizio di quella successiva. La velocità media viene quindi calcolata da `compute_avg_speed_kmh` considerando solo le coppie consecutive appartenenti allo stesso segmento. Per ogni coppia la distanza geografica viene calcolata tramite `haversine_distance_km`; vengono escluse le coppie con un intervallo superiore a 90 secondi e quelle con una distanza inferiore a 5 metri, considerate rispettivamente non contigue e rumore GPS. La velocità ottenuta viene rapportata alla durata complessiva delle sessioni `Moving`. Le durate del movimento e delle pause vengono invece calcolate da `compute_durations` a partire dalle `MovementSession`, sommando separatamente la durata delle sessioni `Moving` e `Stopped` e considerando solo la parte di ciascuna sessione compresa nell'intervallo richiesto. La struttura `segments` restituita dal report è un `Vec<Vec<Position>>`, in cui il vettore esterno rappresenta l'insieme dei segmenti di movimento del periodo richiesto, mentre ogni vettore interno contiene le posizioni di un singolo segmento associato a una sessione `Moving`. In questo modo i tragitti di sessioni diverse rimangono separati e il frontend non collega erroneamente la fine di una sessione con l'inizio della successiva.
 
-Inoltre, la funzione `get_own_positions_handler` permette agli utenti autenticati di recuperare le proprie posizioni relative alla sessione di movimento attualmente aperta, considerando un intervallo che parte da 60 secondi prima dell’inizio della sessione e termina al momento della richiesta.
+La funzione `get_positions_for_user` centralizza il recupero delle posizioni relative alla sessione di movimento attualmente aperta di un utente, considerando un intervallo che parte da 60 secondi prima dell'inizio della sessione e termina al momento della richiesta. Se l'utente non dispone di una sessione aperta, viene restituita una lista vuota. L'helper viene utilizzato sia da `get_own_positions_handler`, che identifica l'utente tramite `claims.sub` e consente agli utenti autenticati di recuperare le proprie posizioni, sia da `get_user_positions_handler`, che riceve l'identificativo dell'utente tramite il parametro della URL ed è riservato agli amministratori; in quest'ultimo caso viene inoltre verificata preventivamente l'esistenza dell'utente.
 
 ## 7. Messaggistica (handlers/messages.rs, mqtt/handlers.rs)
 
@@ -199,7 +201,7 @@ Il sistema di messaggistica gestisce l'invio e la ricezione di messaggi diretti 
 
 ### 7.1 Invio e recupero dei messaggi tramite HTTPS
 
-Il modulo `messages.rs` espone le route dedicate alla messaggistica. `get_messages_handler` distingue innanzitutto il tipo di richiesta in base al ruolo dell'utente e al parametro `with`. Per un amministratore, `with` identifica l'utente con cui visualizzare la conversazione diretta; se non viene specificato, vengono invece recuperati i soli messaggi broadcast. Per un utente normale non è necessario specificare `with`, perché vengono recuperati automaticamente i messaggi diretti che lo riguardano insieme ai broadcast. Il parametro `limit` stabilisce il numero massimo di messaggi restituiti: se non viene specificato viene utilizzato il valore predefinito di 50. `clamp(1, MAX_LIMIT)` limita comunque il valore tra 1 e 200. La differenza nella gestione delle conversazioni rispecchia le esigenze delle due interfacce: . TODO chiedere a enzo il funzionamento per completare
+Il modulo `messages.rs` espone le route dedicate alla messaggistica. `get_messages_handler` distingue innanzitutto il tipo di richiesta in base al ruolo dell'utente e al parametro `with`. Per un amministratore, `with` identifica l'utente con cui visualizzare la conversazione diretta; se non viene specificato, vengono invece recuperati i soli messaggi broadcast. Per un utente normale non è necessario specificare `with`, perché vengono recuperati automaticamente i messaggi diretti che lo riguardano insieme ai broadcast. Il parametro `limit` stabilisce il numero massimo di messaggi restituiti: se non viene specificato viene utilizzato il valore predefinito di 50. `clamp(1, MAX_LIMIT)` limita comunque il valore tra 1 e 200. La differenza nella gestione delle conversazioni rispecchia le esigenze delle due interfacce: mentre l'amministratore ha le chat con tutti gli utenti, l'utente normale ha solo una chat con l'amministratore. 
 
 L'invio tramite HTTPS è invece riservato agli amministratori: `post_direct_message` verifica l'esistenza del destinatario, salva il messaggio nel database e ne notifica la ricezione tramite MQTT, mentre `post_broadcast_handler` salva e pubblica un messaggio destinato a tutti gli utenti. Entrambe le funzioni utilizzano `validate_content` per verificare che il messaggio non sia vuoto e non superi i 1000 caratteri. I messaggi vengono quindi prima persistiti nel database e solo successivamente notificati tramite MQTT, mantenendo lo storico disponibile anche nel caso in cui la pubblicazione MQTT non vada a buon fine.
 
@@ -211,9 +213,148 @@ Quando un utente invia un messaggio tramite MQTT, questo viene invece ricevuto d
 
 ## 8. Frontend
 
-### 8.1
+### 8.1 Panoramica
 
-Se ti interessa io nel corso di applicazioni web avevo fatto "componenti principali" con una breve spiegazione e "pagine"
+Il frontend è un'applicazione web realizzata con **React 18**, **TypeScript** e **Vite**. L'interfaccia è organizzata in due aree distinte, con un design system basato su **Tailwind CSS** e componenti in stile *glassmorphism*.
+
+### 8.2 Stack tecnico
+
+| Tecnologia | Utilizzo nel progetto |
+|---|---|
+| React 18 | Framework UI per la costruzione dell'interfaccia utente tramite componenti funzionali e hook. |
+| TypeScript | Tipizzazione statica di tutto il codice sorgente, inclusi modelli dati, props dei componenti e risposte API. |
+| Vite | Build tool e dev server; fornisce HMR rapido e bundling ottimizzato per la produzione (`npm run build`). |
+| React Router DOM | Gestione del routing lato client; le route protette verificano autenticazione e ruolo admin. |
+| Tailwind CSS | Utility-first CSS framework; il tema è personalizzato tramite direttive `@theme` con palette scura e variabili per il design glassmorphism. |
+| Framer Motion | Animazioni di entrata, transizioni tra pagine e micro-interazioni (hover, tap, scroll). |
+| Leaflet + React-Leaflet | Visualizzazione delle mappe interattive per il tracciamento della posizione singola e della flotta. |
+| Axios | Client HTTP per le chiamate REST al backend; configurato con interceptor per il JWT e gestione centralizzata degli errori. |
+| MQTT.js | Client MQTT che opera su WebSocket (`wss://broker.emqx.io:8084/mqtt`) per la pubblicazione di messaggi e posizioni in tempo reale. |
+| Lucide React | Libreria di icone utilizzata in tutta l'applicazione per garantire coerenza visiva. |
+
+### 8.3 Struttura del progetto
+
+Il codice sorgente è organizzato nella cartella `src/` secondo il seguente schema:
+
+```
+src/
+├── components/
+│   ├── auth/           # Form di login e registrazione
+│   ├── dashboard/      # Mappe (singola utente e flotta), sidebar utente
+│   ├── layout/         # Navbar con navigazione condizionale admin/user
+│   ├── messages/       # Sidebar conversazioni e finestra chat
+│   └── ui/             # Componenti riutilizzabili (GlassCard, FormInput, AnimatedBackground, ...)
+├── context/
+│   └── AuthContext.tsx # Gestione globale dello stato di autenticazione (JWT, ruolo, userId)
+├── hooks/
+│   └── useMqttClient.ts# Hook per la connessione e pubblicazione MQTT
+├── lib/
+│   └── api.ts          # Istanza Axios configurata con base URL, interceptor JWT e gestione errori
+├── pages/
+│   ├── AuthPage.tsx           # Pagina di accesso (login + registrazione affiancati)
+│   ├── DashboardPage.tsx      # Dashboard utente con mappa personale e stato
+│   ├── MessagesPage.tsx       # Messaggistica utente (admin e broadcast)
+│   └── admin/
+│       ├── AdminDashboardPage.tsx  # Panoramica flotta, stats e mappa multi-utente
+│       ├── AdminUsersPage.tsx      # Gestione, filtro, promozione e eliminazione utenti
+│       ├── AdminReportsPage.tsx    # Generazione report per singolo utente con mappa e metriche
+│       └── AdminMessagesPage.tsx   # Messaggistica admin (diretta e broadcast)
+├── types/              # Tipi TypeScript condivisi (User, messaggi, coordinate, ...)
+├── App.tsx             # Router principale, route protette e banner errori globali
+├── main.tsx            # Entry point con StrictMode
+└── index.css           # Tailwind + design system custom (glass, input, bottoni, griglia)
+```
+
+### 8.4 Design system e UI
+
+L'interfaccia utilizza un tema scuro uniforme basato su una palette di grigi profondi (`#050505` background, `#111` surface) con accenti bianchi e colori di stato (emerald per *moving*, amber per *stopped*, neutral per *disconnected*).
+
+I componenti fondamentali del design system sono:
+
+- **`GlassCard`**: contenitore con sfondo semi-trasparente, `backdrop-filter: blur`, bordo sottile e ombre stratificate. Supporta varianti (`default`, `hover`, `interactive`, `subtle`) per adattarsi a contesti diversi (card cliccabili, sidebar, chat).
+- **`AnimatedBackground`**: sfondo fisso con gradienti radiali animati (Framer Motion) e griglia sottile, applicato a tutte le pagine per dare profondità senza distrarre.
+- **`FormInput`** e **`glass-input`**: campi di input con icona, stile glass e stati focus con bordo luminoso.
+- **`btn-primary` / `btn-secondary`**: bottoni con stile pieno (bianco su nero) o outlined, usati rispettivamente per azioni principali e secondarie.
+
+### 8.5 Autenticazione e routing
+
+L'autenticazione è gestita interamente lato client tramite **JWT** memorizzato in `localStorage`. 
+
+L' `AuthContext`:
+- All'avvio legge il token, ne decodifica il payload (campi `sub`/`user_id`, `is_admin`) e inizializza lo stato globale.
+- Fornisce le funzioni `login(token)` e `logout()`.
+- Reindirizza automaticamente gli admin alla route `/admin` se tentano di accedere alla root `/`.
+
+Il routing in `App.tsx` protegge le route tramite il componente `ProtectedRoute`, che verifica `isAuthenticated` e, per le sezioni admin, il flag `isAdmin`. Le chiamate API che ricevono HTTP 401 attivano un interceptor che cancella il token e reindirizza al login.
+
+### 8.6 Comunicazione con il backend
+
+#### 8.6.1 API REST (`lib/api.ts`)
+
+Il modulo `api.ts` crea un'istanza Axios con:
+- `baseURL` letto dalla variabile d'ambiente `VITE_API_URL` (default: `https://127.0.0.1:3001`).
+- **Request interceptor**: aggiunge l'header `Authorization: Bearer <token>` se presente in `localStorage`.
+- **Response interceptor**: in caso di 401 effettua il logout automatico; per altri errori emette un evento globale `app-error` che viene visualizzato dal banner in `App.tsx`.
+
+#### 8.6.2 MQTT (`hooks/useMqttClient.ts`)
+
+L'hook `useMqttClient` gestisce una singola connessione MQTT over WebSocket verso `wss://broker.emqx.io:8084/mqtt`. Al mount crea un client con `clean: true`, riconnessione automatica ogni 5 secondi e keepalive di 60 secondi. Espone:
+
+- `connected`: stato della connessione.
+- `publish(topic, payload)`: serializza il payload in JSON e pubblica con QoS 1, restituendo una Promise booleana.
+
+L'hook viene utilizzato in `MessagesPage.tsx` per permettere agli utenti di inviare messaggi al server tramite il topic `georuggine/client/:user_id/message`, includendo nel payload il JWT per la verifica lato server.
+
+### 8.7 Pagine principali
+
+#### 8.7.1 Autenticazione (`AuthPage`)
+
+Pagina di ingresso non protetta. Presenta affiancati il form di login e quello di registrazione, separati da un divisore diagonale animato. Entrambi i form utilizzano `FormInput` con icone Lucide e validazione lato server; al successo del login il token viene salvato e l'utente reindirizzato alla dashboard appropriata.
+
+#### 8.7.2 Dashboard utente (`DashboardPage`)
+
+Layout a due colonne: sidebar sinistra (`UserSidebar`) con dati profilo, stato di movimento e coordinate; area destra (`MapView`) con mappa Leaflet in tema scuro (tile CARTO dark) che mostra la posizione corrente e la traiettoria della sessione aperta.
+
+Il polling avviene ogni 30 secondi: una chiamata a `/api/me` aggiorna lo stato, mentre `/api/me/positions` recupera le posizioni della sessione corrente. Quando l'utente passa da *disconnected* a online, la traiettoria precedente viene azzerata per ricominciare il tracciamento dalla nuova sessione.
+
+#### 8.7.3 Messaggistica utente (`MessagesPage`)
+
+Interfaccia chat con sidebar a sinistra (due voci fisse: *Admin* e *Broadcast*) e finestra conversazione a destra (`ChatWindow`). I messaggi vengono recuperati da `/api/messages` con polling ogni 5 secondi. L'invio verso l'admin utilizza MQTT (topic `georuggine/client/:user_id/message`); il canale broadcast è in sola lettura.
+
+#### 8.7.4 Dashboard admin (`AdminDashboardPage`)
+
+Panoramica della flotta in tempo reale. In alto sono visualizzate quattro card riassuntive (utenti totali, in movimento, attivi, link ai report) che navigano alle rispettive sezioni. L'area principale ospita `FleetMapView`, una mappa multi-utente che traccia fino a 4 veicoli selezionabili da un dropdown. Per ogni utente selezionato viene chiamato `/api/report?period=day` e le sessioni di movimento (`segments`) vengono appiattite in un'unica traiettoria colorata. Il refresh è configurabile (default 10 secondi).
+
+#### 8.7.5 Gestione utenti (`AdminUsersPage`)
+
+Pagina divisa in due pannelli: a sinistra il form per registrare nuovi utenti (anche admin) tramite `POST /api/admin/register`; a destra la lista utenti con ricerca testuale, filtri per ruolo e stato, toggle admin e eliminazione. Le azioni su se stessi sono disabilitate. La lista è virtualmente scrollabile e mostra badge di ruolo, indicatore di stato e pulsanti azione.
+
+#### 8.7.6 Report (`AdminReportsPage`)
+
+Strumento di analisi per singolo utente. L'admin seleziona un utente da un dropdown con ricerca, sceglie la granularità (giorno/settimana/mese) e genera il report. Il risultato mostra:
+- **Metriche**: velocità media, tempo in movimento, tempo in pausa.
+- **Mappa**: una Polyline per ogni sessione di movimento (colori diversi per sessione), marker di partenza (verde) e ultima posizione (ambra).
+- **Legenda**: spiegazione dei colori e conteggio delle sessioni.
+
+#### 8.7.7 Messaggistica admin (`AdminMessagesPage`)
+
+Simile alla pagina utente ma con funzionalità estese: la sidebar mostra tutti gli utenti non-admin con indicatore di stato; l'admin può selezionare un utente per conversazione diretta (via `POST /api/messages/direct`) o il canale broadcast (via `POST /api/broadcast`). Lo storico viene aggiornato con polling ogni 3 secondi.
+
+### 8.8 Build e avvio
+
+Per l'ambiente di sviluppo:
+```bash
+cd client
+npm install
+npm run dev
+```
+
+Per la build di produzione:
+```bash
+npm run build
+```
+
+L'output viene generato nella cartella `dist/` e può essere servito da qualsiasi web server statico. Il backend HTTPS deve essere raggiungibile all'indirizzo configurato in `VITE_API_URL`. 
 
 ## 9. API
 
@@ -303,21 +444,25 @@ Se ti interessa io nel corso di applicazioni web avevo fatto "componenti princip
     - `order_by_dir`
     - `search`
     - `is_admin`
+    - `state`
     - `limit`
     - `offset`
   - Response 200 OK:
     ```json
-    [
-      {
-        "id": 1,
-        "name": "Marco",
-        "surname": "Rossi",
-        "email": "mrossi@example.com",
-        "created_at": "2026-06-20T14:30:45Z",
-        "state": "moving",
-        "is_admin": false
-      }
-    ]
+    {
+      "users": [
+        {
+          "id": 1,
+          "name": "Marco",
+          "surname": "Rossi",
+          "email": "mrossi@example.com",
+          "created_at": "2026-06-20T14:30:45Z",
+          "state": "moving",
+          "is_admin": false
+        }
+      ],
+      "has_next_page": true
+    }
     ```
   - Response 401 Unauthorized: `{"error": "L'utente non ha effettuato l'accesso"}`
   - Response 403 Forbidden: `{"error": "Accesso riservato agli amministratori"}`
@@ -355,7 +500,7 @@ Se ti interessa io nel corso di applicazioni web avevo fatto "componenti princip
         "sender_id": 1,
         "recipient_id": 2,
         "content": "Messaggio per il camionista",
-        "sent_at":: "2026-06-20T14:30:45Z"
+        "sent_at": "2026-06-20T14:30:45Z"
       },
       {
         "id": 16,
@@ -416,21 +561,62 @@ Se ti interessa io nel corso di applicazioni web avevo fatto "componenti princip
       "user_id": 1,
       "period": "day",
       "segments": [
-        {
-          "lat": 45.0703,
-          "lon": 7.6869,
-          "recorded_at": "2026-06-20T14:30:45Z"
-        },
-        {
-          "lat": 45.0721,
-          "lon": 7.6895,
-          "recorded_at": "2026-06-20T14:31:20Z"
-        },
-      ],
+          [
+            {
+              "lat": 45.0703,
+              "lon": 7.6869,
+              "recorded_at": "2026-06-20T14:30:45Z"
+            },
+            {
+              "lat": 45.0721,
+              "lon": 7.6895,
+              "recorded_at": "2026-06-20T14:31:20Z"
+            }
+          ],
+          [
+            {
+              "lat": 45.1000,
+              "lon": 7.7000,
+              "recorded_at": "2026-06-20T16:10:00Z"
+            },
+            {
+              "lat": 45.1020,
+              "lon": 7.7040,
+              "recorded_at": "2026-06-20T16:10:30Z"
+            }
+          ]
+        ],
       "avg_speed_kmh": 42.5,
       "movement_duration_secs": 3600,
-      "pause_duration_secs": 600
+      "pause_duration_secs": 600,
+      "last_known_position": {
+        "lat": 45.1020,
+        "lon": 7.7040,
+        "recorded_at": "2026-06-20T16:10:30Z"
+      }
     }
+    ```
+  - Response 401 Unauthorized: `{"error": "L'utente non ha effettuato l'accesso"}`
+  - Response 403 Forbidden: `{"error": "Accesso riservato agli amministratori"}`
+  - Response 404 Not Found: `{"error": "Utente non trovato"}`
+  - Response 500 Internal Server Error: `{"error": "Errore del server"}` oppure `{"error": "Impossibile calcolare il tragitto"}` oppure `{"error": "Impossibile calcolare le durate del movimento e delle pause"}`
+- **GET `/api/admin/users/:user_id/positions`**
+  - Query parameters:
+    - `user_id`
+  - Response 200 OK:
+    ```json
+    [
+      {
+        "lat": 45.0703,
+        "lon": 7.6869,
+        "recorded_at": "2026-06-20T14:30:45Z"
+      },
+      {
+        "lat": 45.0721,
+        "lon": 7.6895,
+        "recorded_at": "2026-06-20T14:31:20Z"
+      }
+    ]
     ```
   - Response 401 Unauthorized: `{"error": "L'utente non ha effettuato l'accesso"}`
   - Response 403 Forbidden: `{"error": "Accesso riservato agli amministratori"}`
@@ -518,6 +704,7 @@ Se ti interessa io nel corso di applicazioni web avevo fatto "componenti princip
       "error": "Coordinate non valide"
     }
     ```
+
 ## 10. Demo
 
 ### 10.0 Elenco dei file
