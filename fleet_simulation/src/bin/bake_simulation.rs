@@ -11,7 +11,7 @@
 
 use chrono::{DateTime, Utc};
 use csv::{Reader, WriterBuilder};
-use rand::seq::IndexedRandom;
+use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{rng, RngExt};
 use reqwest::{Client, Error};
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,8 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use futures::future::join_all;
+use serde_json::json;
+use serde_json::Value::Null;
 use tokio;
 
 #[path = "../osrm.rs"]
@@ -58,6 +60,14 @@ struct TokenResponse {
 #[derive(Serialize, Debug)]
 struct UsersOption {
     is_admin: bool,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct UsersResponse {
+    pub users: Vec<User>,
+    pub has_next_page: bool,
 }
 
 fn build_http_client() -> Client {
@@ -67,7 +77,7 @@ fn build_http_client() -> Client {
         .expect("failed to build HTTP client")
 }
 
-async fn get_users() -> Result<Vec<User>, Error> {
+async fn get_users(num_users: Option<usize>) -> Result<Vec<User>, Error> {
     let client = build_http_client();
     let credentials = ("admin@example.com", "Password123!");
 
@@ -80,34 +90,50 @@ async fn get_users() -> Result<Vec<User>, Error> {
         .await?
         .token;
 
-    let users_option = UsersOption { is_admin: false };
+    let users_option = UsersOption {
+        is_admin: false,
+        limit: Some(2000),
+        offset: None,
+    };
 
-    let users = client
+    let mut response = client
         .get("https://127.0.0.1:3001/api/users")
         .header("Authorization", format!("Bearer {}", token))
         .query(&users_option)
         .send()
         .await?
-        .json::<Vec<User>>()
+        .json::<UsersResponse>()
         .await?;
 
-    Ok(users)
-}
+    let mut users = response.users;
 
-async fn login_user(email: &str) -> Result<String, Error> {
-    let client = build_http_client();
-    let credentials = (email, "Password123!");
+    let mut offset: u32 = 0;
+    while response.has_next_page {
+        offset += 2000;
 
-    let token = client
-        .post("https://127.0.0.1:3001/api/login")
-        .json(&credentials)
-        .send()
-        .await?
-        .json::<TokenResponse>()
-        .await?
-        .token;
+        let users_option = UsersOption {
+            is_admin: false,
+            limit: Some(offset),
+            offset: Some(2000 as u32),
+        };
 
-    Ok(token)
+        response = client
+            .get("https://127.0.0.1:3001/api/users")
+            .header("Authorization", format!("Bearer {}", token))
+            .query(&users_option)
+            .send()
+            .await?
+            .json::<UsersResponse>()
+            .await?;
+
+        users.append(&mut response.users);
+    }
+
+    let mut rng = rng();
+    users.shuffle(& mut rng);
+
+    let take: usize = num_users.unwrap_or( users.len() ).min( users.len() );
+    Ok(users[..take].to_vec())
 }
 
 async fn simulate_user_movement(
@@ -171,7 +197,7 @@ async fn simulate_user_movement(
                 None => {
                     let choice = {
                         let mut rng = rng();
-                        rng.random_range(1..=15)
+                        rng.random_range(1..=30)
                     };
 
                     match choice {
@@ -186,7 +212,7 @@ async fn simulate_user_movement(
                                 MESSAGES_CSV,
                                 user.id,
                                 &user.email,
-                                "destinazione raggiunta",
+                                &format!("destinazione raggiunta: {}", current_destination_name),
                                 simulated_elapsed_ms,
                                 &mut last_msg_time_ms,
                             )?;
@@ -202,15 +228,12 @@ async fn simulate_user_movement(
                             current_destination_name = next_kebab.name.clone();
                             break;
                         }
-                        2 => {
-                            add_message(
-                                MESSAGES_CSV,
-                                user.id,
-                                &user.email,
-                                "pausa di 120 secondi",
-                                simulated_elapsed_ms,
-                                &mut last_msg_time_ms,
-                            )?;
+                        2..15 => {
+                            let next_kebab = {
+                                let mut rng = rng();
+                                kebab_shops.choose(&mut rng).unwrap().clone()
+                            };
+                            current_origin = (next_kebab.lat, next_kebab.lon);
                             simulated_elapsed_ms += PAUSE_SECONDS * 1_000;
                         }
                         _ => {
@@ -382,6 +405,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or(60);
     let simulation_duration_ms = simulation_minutes * 60_000;
 
+    let num_users: Option<usize> = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok());
+
     println!(
         "=== Fleet Simulation ===\nDuration: {} minutes ({} ms simulated)\n",
         simulation_minutes, simulation_duration_ms
@@ -400,7 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ).into());
     }
 
-    let users = get_users().await?;
+    let users = get_users(num_users).await?;
 
     if users.is_empty() {
         return Err("no users returned by GET /api/users: create some users first before starting the simulation".into());

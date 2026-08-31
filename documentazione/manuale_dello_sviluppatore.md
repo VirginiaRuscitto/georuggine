@@ -74,8 +74,8 @@ Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separat
   # 2. crea 20 utenti di test (password Password123! per tutti)
   cargo run --bin create_users
   
-  # 3. genera i tragitti simulati per 60 minuti (richiede OSRM avviato al passo 0)
-  cargo run --bin bake_simulation 60
+  # 3. genera i tragitti di 5 utenti simulati per 60 minuti (richiede OSRM avviato al passo 0)
+  cargo run --bin bake_simulation 60 5
   
   # 4. riproduce la simulazione via MQTT a velocità normale (1x)
   cargo run --bin replay
