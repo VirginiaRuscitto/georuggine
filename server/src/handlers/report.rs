@@ -11,7 +11,7 @@ use chrono::{DateTime, Datelike, Days, NaiveDate, Utc};
 use serde::Deserialize;
 use crate::{
     auth::{self, Claims},
-    dao::{movement_sessions_dao, position_log_dao},
+    dao::{movement_sessions_dao, position_log_dao, users_dao},
     errors::error_response,
     models::{MovementSession, MovementState, Position, ReportPeriod, RouteReport},
     state::AppState,
@@ -38,6 +38,23 @@ pub async fn get_report_handler(State(state): State<AppState>, Query(params): Qu
 /// sommi la distanza "fantasma" tra la fine di una sessione e l'inizio della
 /// successiva.
 async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> Response {
+    match users_dao::get_user_by_id(&state.db, user_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return error_response(
+                StatusCode::NOT_FOUND,
+                "Utente non trovato",
+            );
+        }
+        Err(e) => {
+            tracing::error!("errore get_user_by_id: {e}");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile recuperare l'utente",
+            );
+        }
+    }
+
     let (start, end) = get_start_end_from_report_period(period);
 
     let mut sessions = match movement_sessions_dao::get_sessions_in_range(&state.db, user_id, start, end) {
@@ -74,6 +91,8 @@ async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> R
     // `windows(2)` per calcolare le distanze tra punti consecutivi).
     positions.sort_by_key(|p| p.recorded_at);
 
+    let last_known_position = positions.last().copied();
+
     let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, start, end);
     let segments = build_segments(&sessions, &positions);
     let avg_speed_kmh = compute_avg_speed_kmh(&segments, movement_duration_secs);
@@ -85,6 +104,7 @@ async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> R
         avg_speed_kmh,
         movement_duration_secs,
         pause_duration_secs,
+        last_known_position,
     })
     .into_response()
 }
@@ -118,6 +138,47 @@ fn build_segments(sessions: &[MovementSession], positions: &[Position]) -> Vec<V
         .collect()
 }
 
+async fn get_positions_for_user(
+    state: &AppState,
+    user_id: i64,
+) -> Response {
+    let session = match movement_sessions_dao::get_open_session_for_user(
+        &state.db,
+        user_id,
+    ) {
+        Ok(Some(s)) => s,
+        Ok(None) => return Json(Vec::<Position>::new()).into_response(),
+        Err(e) => {
+            tracing::error!("errore get_open_session_for_user: {e}");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile recuperare la sessione",
+            );
+        }
+    };
+
+    let now = Utc::now();
+    let start = session.started_at - chrono::Duration::seconds(60);
+
+    let positions = match position_log_dao::get_positions_in_range(
+        &state.db,
+        user_id,
+        start,
+        now,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("errore get_positions_in_range: {e}");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile recuperare le posizioni",
+            );
+        }
+    };
+
+    Json(positions).into_response()
+}
+
 /// GET /api/me/positions (utente autenticato, solo le sue posizioni per la mappa)
 ///
 /// Ritorna le posizioni della **sessione corrente aperta** in `movement_sessions`.
@@ -128,54 +189,31 @@ pub async fn get_own_positions_handler(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Response {
-    let session = match movement_sessions_dao::get_open_session_for_user(&state.db, claims.sub) {
-        Ok(Some(s)) => s,
-        Ok(None) => return Json(Vec::<Position>::new()).into_response(),
-        Err(e) => {
-            tracing::error!("errore get_open_session_for_user: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile recuperare la sessione");
-        }
-    };
-
-    let now = Utc::now();
-    let start = session.started_at - chrono::Duration::seconds(60);
-
-    let positions = match position_log_dao::get_positions_in_range(&state.db, claims.sub, start, now) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!("errore get_positions_in_range: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile recuperare le posizioni");
-        }
-    };
-
-    Json(positions).into_response()
+    get_positions_for_user(&state, claims.sub).await
 }
 
 pub async fn get_user_positions_handler(
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
 ) -> Response {
-    let session = match movement_sessions_dao::get_open_session_for_user(&state.db, user_id) {
-        Ok(Some(s)) => s,
-        Ok(None) => return Json(Vec::<Position>::new()).into_response(),
-        Err(e) => {
-            tracing::error!("errore get_open_session_for_user: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile recuperare la sessione");
+    match users_dao::get_user_by_id(&state.db, user_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return error_response(
+                StatusCode::NOT_FOUND,
+                "Utente non trovato",
+            );
         }
-    };
-
-    let now = Utc::now();
-    let start = session.started_at - chrono::Duration::seconds(60);
-
-    let positions = match position_log_dao::get_positions_in_range(&state.db, user_id, start, now) {
-        Ok(p) => p,
         Err(e) => {
-            tracing::error!("errore get_positions_in_range: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile recuperare le posizioni");
+            tracing::error!("errore get_user_by_id: {e}");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile recuperare l'utente",
+            );
         }
-    };
+    }
 
-    Json(positions).into_response()
+    get_positions_for_user(&state, user_id).await
 }
 
 pub fn get_start_end_from_report_period(report_period: ReportPeriod) -> (DateTime<Utc>, DateTime<Utc>) {

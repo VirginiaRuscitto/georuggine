@@ -46,8 +46,8 @@ export default function AdminMessagesPage() {
   useEffect(() => {
     const fetchUsers = async () => {
       try {
-        const res = await api.get('/api/users');
-        const allUsers = res.data || [];
+        const res = await api.get<UsersResponse>('/api/users');
+        const allUsers = res.data.users || [];
         const nonAdmin = allUsers.filter((u: any) => u.is_admin === false);
         setUsers(nonAdmin);
       } catch (e: any) {

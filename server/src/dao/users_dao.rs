@@ -94,7 +94,9 @@ pub fn get_all_users(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<User>> {
-    let mut query = String::from("SELECT id, name, surname, email, created_at, is_admin FROM users");
+    let mut query = String::from(
+        "SELECT id, name, surname, email, created_at, is_admin FROM users"
+    );
 
     let mut conditions: Vec<&str> = Vec::new();
     let mut params: Vec<Box<dyn ToSql>> = Vec::new();
@@ -102,8 +104,12 @@ pub fn get_all_users(
     // 1. Search Filter
     if let Some(s) = search {
         if !s.trim().is_empty() {
-            conditions.push("(name LIKE ? OR surname LIKE ? OR email LIKE ?)");
+            conditions.push(
+                "(name LIKE ? OR surname LIKE ? OR email LIKE ?)"
+            );
+
             let pattern = format!("%{}%", s.trim());
+
             params.push(Box::new(pattern.clone()));
             params.push(Box::new(pattern.clone()));
             params.push(Box::new(pattern));
@@ -121,19 +127,37 @@ pub fn get_all_users(
         query.push_str(&conditions.join(" AND "));
     }
 
-    let field = order_by_field.unwrap_or(OrderByField::Name).column();
-    let dir = order_by_dir.unwrap_or(OrderDirection::Asc).to_sql();
+    let field = order_by_field
+        .unwrap_or(OrderByField::Name)
+        .column();
+
+    let dir = order_by_dir
+        .unwrap_or(OrderDirection::Asc)
+        .to_sql();
+
     query.push_str(&format!(" ORDER BY {field} {dir}"));
 
-    let limit_val = limit.unwrap_or(10).min(100);
-    let offset_val = offset.unwrap_or(0);
-    query.push_str(" LIMIT ? OFFSET ?");
-    params.push(Box::new(limit_val));
-    params.push(Box::new(offset_val));
+    // La paginazione viene applicata solo quando richiesta.
+    // Il filtro state viene invece applicato dal handler,
+    // perché lo stato non è salvato nella tabella users.
+    if let Some(limit_val) = limit {
+        let limit_val = limit_val.min(100);
+        let offset_val = offset.unwrap_or(0);
+
+        query.push_str(" LIMIT ? OFFSET ?");
+        params.push(Box::new(limit_val));
+        params.push(Box::new(offset_val));
+    }
 
     let conn = db.lock().unwrap();
+
     let mut stmt = conn.prepare(&query)?;
-    let rows = stmt.query_map(params_from_iter(params.iter()), row_to_user)?;
+
+    let rows = stmt.query_map(
+        params_from_iter(params.iter()),
+        row_to_user,
+    )?;
+
     rows.collect()
 }
 

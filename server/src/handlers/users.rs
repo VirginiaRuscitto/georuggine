@@ -19,7 +19,7 @@ use crate::{
     auth::Claims,
 };
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct UserStatus {
     pub id: i64,
     pub name: String,
@@ -50,45 +50,90 @@ pub struct UsersQuery {
     pub order_by_dir: Option<OrderDirection>,
     pub search: Option<String>,
     pub is_admin: Option<bool>,
+    pub state: Option<UserState>,
     pub limit: Option<u32>,
-    pub offset: Option<u32>
+    pub offset: Option<u32>,
+}
+
+#[derive(Serialize)]
+pub struct UsersResponse {
+    pub users: Vec<UserStatus>,
+    pub has_next_page: bool,
 }
 
 /// GET /api/users
 /// Ritorna la lista completa degli utenti registrati.
-pub async fn get_users_handler(State(state): State<AppState>, Query(params): Query<UsersQuery>) -> Response {
+pub async fn get_users_handler(
+    State(state): State<AppState>,
+    Query(params): Query<UsersQuery>,
+) -> Response {
+    let limit = params.limit.unwrap_or(10).min(100) as usize;
+    let offset = params.offset.unwrap_or(0) as usize;
+
+    // La paginazione viene fatta dopo il filtro dello stato,
+    // perché lo stato vive in ActiveUsers e non nel database.
     let users = match users_dao::get_all_users(
         &state.db,
         params.search,
         params.order_by_field,
         params.order_by_dir,
         params.is_admin,
-        params.limit,
-        params.offset,
+        None,
+        None,
     ) {
         Ok(u) => u,
         Err(e) => {
             tracing::error!("errore get_all_users: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Impossibile recuperare gli utenti");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile recuperare gli utenti",
+            );
         }
     };
 
     let active = state.active_users.read().unwrap();
 
-    let result: Vec<UserStatus> = users
+    let filtered: Vec<UserStatus> = users
         .into_iter()
-        .map(|u| UserStatus {
-            id: u.id,
-            name: u.name,
-            surname: u.surname,
-            email: u.email,
-            created_at: u.created_at,
-            state: active.get(&u.id).map(|s| s.state).unwrap_or(UserState::Disconnected),
-            is_admin: u.is_admin,
+        .map(|u| {
+            let user_state = active
+                .get(&u.id)
+                .map(|s| s.state)
+                .unwrap_or(UserState::Disconnected);
+
+            UserStatus {
+                id: u.id,
+                name: u.name,
+                surname: u.surname,
+                email: u.email,
+                created_at: u.created_at,
+                state: user_state,
+                is_admin: u.is_admin,
+            }
+        })
+        .filter(|u| {
+            match params.state {
+                None => true,
+                Some(state_filter) => u.state == state_filter,
+            }
         })
         .collect();
 
-    Json(result).into_response()
+    let end = (offset + limit + 1).min(filtered.len());
+
+    let has_next_page = end > offset + limit;
+
+    let users = if offset >= filtered.len() {
+        Vec::new()
+    } else {
+        filtered[offset..end.min(offset + limit)].to_vec()
+    };
+
+    Json(UsersResponse {
+        users,
+        has_next_page,
+    })
+    .into_response()
 }
 
 async fn me_handler(

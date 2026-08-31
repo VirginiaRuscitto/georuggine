@@ -57,6 +57,7 @@ pub struct RouteReport {
     pub avg_speed_kmh: f64,
     pub movement_duration_secs: i64,
     pub pause_duration_secs: i64,
+    pub last_known_position: Option<Position>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]

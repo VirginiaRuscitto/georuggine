@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search,
@@ -19,9 +19,10 @@ import { useAuth } from '../../context/AuthContext';
 
 interface UserItem {
   id: number;
-  username: string;
-  name?: string;
-  surname?: string;
+  name: string;
+  surname: string;
+  email: string;
+  created_at: string;
   state: string;
   is_admin: boolean;
 }
@@ -35,6 +36,11 @@ interface NewUserForm {
   isAdmin: boolean;
 }
 
+interface UsersResponse {
+  users: UserItem[];
+  has_next_page: boolean;
+}
+
 const EMPTY_FORM: NewUserForm = {
   name: '',
   surname: '',
@@ -46,21 +52,25 @@ const EMPTY_FORM: NewUserForm = {
 
 export default function AdminUsersPage() {
   const { userId } = useAuth();
+
   const [users, setUsers] = useState<UserItem[]>([]);
   const [search, setSearch] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [adminFilter, setAdminFilter] = useState<'all' | 'admin' | 'non-admin'>('all');
   const [stateFilter, setStateFilter] = useState<'all' | 'moving' | 'stopped'>('all');
   const [loading, setLoading] = useState(true);
+
   const [form, setForm] = useState<NewUserForm>(EMPTY_FORM);
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
   const filterRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
+  const PAGE_SIZE = 15;
+
+  const [page, setPage] = useState(0);
+  const [hasNextPage, setHasNextPage] = useState(false);
 
   useEffect(() => {
     const onClickOutside = (e: MouseEvent) => {
@@ -68,62 +78,114 @@ export default function AdminUsersPage() {
         setShowFilters(false);
       }
     };
+
     document.addEventListener('mousedown', onClickOutside);
+
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
-  const fetchUsers = async () => {
+  // Quando cambiano ricerca o filtri, torna alla prima pagina.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setPage(0);
+    }, 300);
+
+    return () => clearTimeout(t);
+  }, [search, adminFilter, stateFilter]);
+
+  // L'unico punto che effettua il caricamento della pagina.
+  useEffect(() => {
+    fetchUsers(page);
+  }, [page, search, adminFilter, stateFilter]);
+
+  const fetchUsers = async (targetPage: number) => {
+    setLoading(true);
+
     try {
-      const res = await api.get('/api/users', {
+      const res = await api.get<UsersResponse>('/api/users', {
         params: {
-          order_by: { "Name": 'asc' },
-          limit: null,
-          offset: null,
+          order_by_field: 'name',
+          order_by_dir: 'asc',
+          search: search.trim() || undefined,
+          is_admin:
+            adminFilter === 'all'
+              ? undefined
+              : adminFilter === 'admin',
+          state:
+            stateFilter === 'all'
+              ? undefined
+              : stateFilter,
+          limit: PAGE_SIZE,
+          offset: targetPage * PAGE_SIZE,
         },
       });
-      setUsers(res.data || []);
+
+      const data = res.data;
+
+      setUsers(data.users || []);
+      setHasNextPage(Boolean(data.has_next_page));
     } catch (e) {
       console.error('Errore fetch users:', e);
+      setUsers([]);
+      setHasNextPage(false);
     } finally {
       setLoading(false);
     }
   };
-
-  const filteredUsers = useMemo(() => {
-    const term = search.toLowerCase();
-    return users.filter((u) => {
-      const displayName = `${u.name ?? ''} ${u.surname ?? ''} ${u.username ?? ''}`.toLowerCase();
-      if (term && !displayName.includes(term)) return false;
-      if (adminFilter === 'admin' && !u.is_admin) return false;
-      if (adminFilter === 'non-admin' && u.is_admin) return false;
-      if (stateFilter !== 'all' && u.state !== stateFilter) return false;
-      return true;
-    });
-  }, [users, search, adminFilter, stateFilter]);
 
   const handleToggleAdmin = async (u: UserItem) => {
     if (u.id === userId) {
       alert('Non puoi modificare il tuo stesso account');
       return;
     }
+
     const previousValue = u.is_admin;
-    setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_admin: !x.is_admin } : x)));
+
+    setUsers((prev) =>
+      prev.map((x) =>
+        x.id === u.id
+          ? { ...x, is_admin: !x.is_admin }
+          : x
+      )
+    );
+
     try {
-      const res = await api.put(`/api/admin/users/${u.id}/admin`, { is_admin: !u.is_admin });
-      console.log(`Toggle admin OK per utente ${u.id}, status:`, res.status);
+      const res = await api.put(
+        `/api/admin/users/${u.id}/admin`,
+        { is_admin: !u.is_admin }
+      );
+
+      console.log(
+        `Toggle admin OK per utente ${u.id}, status:`,
+        res.status
+      );
     } catch (e: any) {
       console.error('Errore toggle admin:', {
         status: e.response?.status,
         data: e.response?.data,
         message: e.message,
       });
+
       setUsers((prev) =>
-        prev.map((x) => (x.id === u.id ? { ...x, is_admin: previousValue } : x))
+        prev.map((x) =>
+          x.id === u.id
+            ? { ...x, is_admin: previousValue }
+            : x
+        )
       );
-      const serverMsg = e.response?.data?.error || e.response?.data?.message;
+
+      const serverMsg =
+        e.response?.data?.error ||
+        e.response?.data?.message;
+
       const status = e.response?.status;
       const detail = status ? ` [HTTP ${status}]` : '';
-      alert(`Impossibile aggiornare l'utente${detail}${serverMsg ? `: ${serverMsg}` : ''}`);
+
+      alert(
+        `Impossibile aggiornare l'utente${detail}${
+          serverMsg ? `: ${serverMsg}` : ''
+        }`
+      );
     }
   };
 
@@ -132,20 +194,37 @@ export default function AdminUsersPage() {
       alert('Non puoi eliminare il tuo stesso account');
       return;
     }
-    if (!window.confirm(`Eliminare l'utente ${u.username}?`)) return;
+
+    if (!window.confirm(`Eliminare l'utente ${u.username}?`)) {
+      return;
+    }
+
     const previous = users;
-    setUsers((prev) => prev.filter((x) => x.id !== u.id));
+
+    setUsers((prev) =>
+      prev.filter((x) => x.id !== u.id)
+    );
+
     try {
       await api.delete(`/api/admin/users/${u.id}`);
     } catch (e: any) {
-      console.error('Errore delete user:', e.response?.data || e.message);
+      console.error(
+        'Errore delete user:',
+        e.response?.data || e.message
+      );
+
       setUsers(previous);
-      alert(e.response?.data?.error || "Impossibile eliminare l'utente");
+
+      alert(
+        e.response?.data?.error ||
+          "Impossibile eliminare l'utente"
+      );
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
     setFormError('');
     setFormSuccess('');
 
@@ -153,20 +232,30 @@ export default function AdminUsersPage() {
       setFormError('Inserisci nome e cognome');
       return;
     }
+
     if (!form.email.trim()) {
       setFormError('Inserisci una email');
       return;
     }
-    if (form.password.length < 12 || !/[A-Z]/.test(form.password) || !/[^a-zA-Z0-9]/.test(form.password)) {
-      setFormError('La password deve avere almeno 12 caratteri, una maiuscola e un simbolo');
+
+    if (
+      form.password.length < 12 ||
+      !/[A-Z]/.test(form.password) ||
+      !/[^a-zA-Z0-9]/.test(form.password)
+    ) {
+      setFormError(
+        'La password deve avere almeno 12 caratteri, una maiuscola e un simbolo'
+      );
       return;
     }
+
     if (form.password !== form.confirmPassword) {
       setFormError('Le password non coincidono');
       return;
     }
 
     setSubmitting(true);
+
     try {
       await api.post('/api/admin/register', {
         name: form.name,
@@ -175,18 +264,25 @@ export default function AdminUsersPage() {
         password: form.password,
         is_admin: form.isAdmin,
       });
+
       setFormSuccess('Utente creato con successo');
       setForm(EMPTY_FORM);
-      await fetchUsers();
+
+      await fetchUsers(page);
+
       setTimeout(() => setFormSuccess(''), 3000);
     } catch (e: any) {
-      setFormError(e.response?.data?.error || 'Errore durante la registrazione');
+      setFormError(
+        e.response?.data?.error ||
+          'Errore durante la registrazione'
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
-  const hasActiveFilters = adminFilter !== 'all' || stateFilter !== 'all';
+  const hasActiveFilters =
+    adminFilter !== 'all' || stateFilter !== 'all';
 
   return (
     <div className="min-h-screen relative">
@@ -200,18 +296,30 @@ export default function AdminUsersPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
         >
-          <h1 className="text-3xl font-bold mb-2">Gestione Utenti</h1>
-          <p className="text-muted">Aggiungi, promuovi o rimuovi gli utenti del sistema</p>
+          <h1 className="text-3xl font-bold mb-2">
+            Gestione Utenti
+          </h1>
+
+          <p className="text-muted">
+            Aggiungi, promuovi o rimuovi gli utenti del sistema
+          </p>
         </motion.div>
 
         <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-6 items-start">
+
           {/* Form registrazione */}
           <GlassCard variant="hover" delay={0.1}>
             <div className="flex items-center gap-3 mb-6">
               <div className="w-9 h-9 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center">
-                <UserPlus size={18} className="text-neutral-300" />
+                <UserPlus
+                  size={18}
+                  className="text-neutral-300"
+                />
               </div>
-              <h2 className="text-lg font-semibold">Registra un nuovo utente</h2>
+
+              <h2 className="text-lg font-semibold">
+                Registra un nuovo utente
+              </h2>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -219,40 +327,63 @@ export default function AdminUsersPage() {
                 <FormField
                   label="Nome"
                   value={form.name}
-                  onChange={(v) => setForm({ ...form, name: v })}
+                  onChange={(v) =>
+                    setForm({ ...form, name: v })
+                  }
                 />
+
                 <FormField
                   label="Cognome"
                   value={form.surname}
-                  onChange={(v) => setForm({ ...form, surname: v })}
+                  onChange={(v) =>
+                    setForm({ ...form, surname: v })
+                  }
                 />
               </div>
+
               <FormField
                 label="Mail"
                 type="email"
                 value={form.email}
-                onChange={(v) => setForm({ ...form, email: v })}
+                onChange={(v) =>
+                  setForm({ ...form, email: v })
+                }
               />
+
               <FormField
                 label="Pass"
                 type="password"
                 value={form.password}
-                onChange={(v) => setForm({ ...form, password: v })}
+                onChange={(v) =>
+                  setForm({ ...form, password: v })
+                }
               />
+
               <FormField
                 label="Pass"
                 type="password"
                 value={form.confirmPassword}
-                onChange={(v) => setForm({ ...form, confirmPassword: v })}
+                onChange={(v) =>
+                  setForm({
+                    ...form,
+                    confirmPassword: v,
+                  })
+                }
               />
 
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none pt-1">
                 <input
                   type="checkbox"
                   checked={form.isAdmin}
-                  onChange={(e) => setForm({ ...form, isAdmin: e.target.checked })}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      isAdmin: e.target.checked,
+                    })
+                  }
                   className="w-4 h-4 rounded border-white/20 bg-white/5 cursor-pointer accent-white"
                 />
+
                 <span>è un admin</span>
               </label>
 
@@ -268,6 +399,7 @@ export default function AdminUsersPage() {
                     {formError}
                   </motion.div>
                 )}
+
                 {formSuccess && (
                   <motion.div
                     className="flex items-center gap-2 text-sm text-success bg-success/10 border border-success/20 rounded-lg px-3 py-2"
@@ -303,18 +435,26 @@ export default function AdminUsersPage() {
           {/* Lista utenti */}
           <GlassCard variant="hover" delay={0.2}>
             <div className="flex items-center justify-center mb-6">
-              <h2 className="text-base font-semibold text-muted tracking-wide">Users list</h2>
+              <h2 className="text-base font-semibold text-muted tracking-wide">
+                Users list
+              </h2>
             </div>
 
             {/* Search + filters */}
             <div className="flex flex-wrap gap-3 mb-6">
               <div className="relative flex-1 min-w-[200px]">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+                <Search
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+                />
+
                 <input
                   type="text"
                   placeholder="Search"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) =>
+                    setSearch(e.target.value)
+                  }
                   className="glass-input w-full !py-2.5 !pl-10 !pr-4 !text-sm"
                 />
               </div>
@@ -322,7 +462,9 @@ export default function AdminUsersPage() {
               <div className="relative" ref={filterRef}>
                 <motion.button
                   type="button"
-                  onClick={() => setShowFilters((v) => !v)}
+                  onClick={() =>
+                    setShowFilters((v) => !v)
+                  }
                   className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm border transition-colors ${
                     hasActiveFilters
                       ? 'bg-white/10 border-white/20 text-white'
@@ -338,51 +480,95 @@ export default function AdminUsersPage() {
                   {showFilters && (
                     <motion.div
                       className="absolute right-0 top-full mt-2 w-64 bg-[#1a1a2e] border border-white/10 rounded-xl p-4 z-[9999] shadow-2xl"
-                      initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                      initial={{
+                        opacity: 0,
+                        y: -8,
+                        scale: 0.95,
+                      }}
+                      animate={{
+                        opacity: 1,
+                        y: 0,
+                        scale: 1,
+                      }}
+                      exit={{
+                        opacity: 0,
+                        y: -8,
+                        scale: 0.95,
+                      }}
                       transition={{ duration: 0.15 }}
                     >
                       <div className="mb-3">
-                        <p className="text-xs uppercase tracking-wider text-muted mb-2">Ruolo</p>
+                        <p className="text-xs uppercase tracking-wider text-muted mb-2">
+                          Ruolo
+                        </p>
+
                         <div className="space-y-1.5">
                           <FilterOption
                             label="Tutti"
                             checked={adminFilter === 'all'}
-                            onChange={() => setAdminFilter('all')}
+                            onChange={() =>
+                              setAdminFilter('all')
+                            }
                           />
+
                           <FilterOption
                             label="Solo admin"
-                            checked={adminFilter === 'admin'}
-                            onChange={() => setAdminFilter('admin')}
+                            checked={
+                              adminFilter === 'admin'
+                            }
+                            onChange={() =>
+                              setAdminFilter('admin')
+                            }
                           />
+
                           <FilterOption
                             label="Solo non admin"
-                            checked={adminFilter === 'non-admin'}
-                            onChange={() => setAdminFilter('non-admin')}
+                            checked={
+                              adminFilter === 'non-admin'
+                            }
+                            onChange={() =>
+                              setAdminFilter('non-admin')
+                            }
                           />
                         </div>
                       </div>
+
                       <div>
-                        <p className="text-xs uppercase tracking-wider text-muted mb-2">Stato</p>
+                        <p className="text-xs uppercase tracking-wider text-muted mb-2">
+                          Stato
+                        </p>
+
                         <div className="space-y-1.5">
                           <FilterOption
                             label="Tutti"
                             checked={stateFilter === 'all'}
-                            onChange={() => setStateFilter('all')}
+                            onChange={() =>
+                              setStateFilter('all')
+                            }
                           />
+
                           <FilterOption
                             label="Moving"
-                            checked={stateFilter === 'moving'}
-                            onChange={() => setStateFilter('moving')}
+                            checked={
+                              stateFilter === 'moving'
+                            }
+                            onChange={() =>
+                              setStateFilter('moving')
+                            }
                           />
+
                           <FilterOption
                             label="Stopped"
-                            checked={stateFilter === 'stopped'}
-                            onChange={() => setStateFilter('stopped')}
+                            checked={
+                              stateFilter === 'stopped'
+                            }
+                            onChange={() =>
+                              setStateFilter('stopped')
+                            }
                           />
                         </div>
                       </div>
+
                       {hasActiveFilters && (
                         <button
                           type="button"
@@ -404,23 +590,56 @@ export default function AdminUsersPage() {
             {/* Lista */}
             <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
               {loading ? (
-                <div className="py-12 text-center text-sm text-muted">Caricamento...</div>
-              ) : filteredUsers.length === 0 ? (
                 <div className="py-12 text-center text-sm text-muted">
-                  {users.length === 0 ? 'Nessun utente registrato' : 'Nessun risultato'}
+                  Caricamento...
+                </div>
+              ) : users.length === 0 ? (
+                <div className="py-12 text-center text-sm text-muted">
+                  Nessun risultato
                 </div>
               ) : (
-                filteredUsers.map((u, i) => (
+                users.map((u, i) => (
                   <UserRow
                     key={u.id}
                     user={u}
                     index={i}
                     isSelf={u.id === userId}
-                    onToggleAdmin={() => handleToggleAdmin(u)}
+                    onToggleAdmin={() =>
+                      handleToggleAdmin(u)
+                    }
                     onDelete={() => handleDelete(u)}
                   />
                 ))
               )}
+            </div>
+
+            {/* Paginazione */}
+            <div className="flex justify-between items-center mt-4">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={page === 0 || loading}
+                onClick={() =>
+                  setPage((p) => p - 1)
+                }
+              >
+                Precedente
+              </button>
+
+              <span className="text-sm text-neutral-400">
+                Pagina {page + 1}
+              </span>
+
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={!hasNextPage || loading}
+                onClick={() =>
+                  setPage((p) => p + 1)
+                }
+              >
+                Successiva
+              </button>
             </div>
           </GlassCard>
         </div>
@@ -442,11 +661,16 @@ function FormField({
 }) {
   return (
     <div>
-      <label className="text-xs text-muted mb-1 block">{label}</label>
+      <label className="text-xs text-muted mb-1 block">
+        {label}
+      </label>
+
       <input
         type={type}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) =>
+          onChange(e.target.value)
+        }
         className="glass-input !py-2.5 !pl-4 !pr-4 !text-sm"
       />
     </div>
@@ -470,6 +694,7 @@ function FilterOption({
         onChange={onChange}
         className="w-3.5 h-3.5 accent-white"
       />
+
       <span>{label}</span>
     </label>
   );
@@ -492,26 +717,35 @@ function UserRow({
     user.state === 'moving'
       ? 'bg-emerald-400'
       : user.state === 'stopped'
-      ? 'bg-amber-400'
-      : 'bg-neutral-600';
+        ? 'bg-amber-400'
+        : 'bg-neutral-600';
 
   return (
     <motion.div
       className="grid grid-cols-[44px_minmax(0,1fr)_140px_140px_88px] items-center gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/[0.04] hover:bg-white/[0.04] transition-colors"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: Math.min(index * 0.03, 0.3) }}
+      transition={{
+        duration: 0.3,
+        delay: Math.min(index * 0.03, 0.3),
+      }}
     >
       {/* Avatar */}
       <div className="w-11 h-11 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
-        <User size={18} className="text-neutral-400" />
+        <User
+          size={18}
+          className="text-neutral-400"
+        />
       </div>
 
       {/* Nome + badge admin */}
       <div className="min-w-0 flex items-center gap-2">
         <p className="text-sm font-medium truncate">
-          {user.name && user.surname ? `${user.name} ${user.surname}` : user.username}
+          {user.name && user.surname
+            ? `${user.name} ${user.surname}`
+            : user.username}
         </p>
+
         {user.is_admin ? (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-semibold uppercase tracking-wide flex-shrink-0">
             <Shield size={10} />
@@ -522,7 +756,12 @@ function UserRow({
             Utente
           </span>
         )}
-        {isSelf && <span className="text-[10px] text-muted flex-shrink-0">(tu)</span>}
+
+        {isSelf && (
+          <span className="text-[10px] text-muted flex-shrink-0">
+            (tu)
+          </span>
+        )}
       </div>
 
       {/* Toggle admin */}
@@ -532,16 +771,26 @@ function UserRow({
           onClick={onToggleAdmin}
           disabled={isSelf}
           aria-pressed={user.is_admin}
-          aria-label={user.is_admin ? 'Rimuovi admin' : 'Rendi admin'}
+          aria-label={
+            user.is_admin
+              ? 'Rimuovi admin'
+              : 'Rendi admin'
+          }
           className={`relative inline-flex w-11 h-6 flex-shrink-0 rounded-full border transition-colors ${
             user.is_admin
               ? 'bg-amber-500/80 border-amber-500'
               : 'bg-white/[0.05] border-white/[0.1]'
-          } ${isSelf ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:brightness-110'}`}
+          } ${
+            isSelf
+              ? 'opacity-40 cursor-not-allowed'
+              : 'cursor-pointer hover:brightness-110'
+          }`}
         >
           <span
             className={`pointer-events-none absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-              user.is_admin ? 'translate-x-5' : 'translate-x-0'
+              user.is_admin
+                ? 'translate-x-5'
+                : 'translate-x-0'
             }`}
           />
         </button>
@@ -553,26 +802,36 @@ function UserRow({
           className={`w-2 h-2 rounded-full flex-shrink-0 ${stateColor}`}
           aria-label={`state ${user.state}`}
         />
-        <span className="capitalize truncate">{user.state}</span>
+
+        <span className="capitalize truncate">
+          {user.state}
+        </span>
       </div>
 
       {/* Actions */}
       <div className="flex items-center justify-end gap-2">
         <motion.button
           type="button"
-          onClick={() => alert(`Richieste per ${user.username}: funzione non ancora implementata`)}
+          onClick={() =>
+            alert(
+              `Richieste per ${user.username}: funzione non ancora implementata`
+            )
+          }
           className="w-8 h-8 rounded-md bg-blue-500/10 border border-blue-500/30 text-blue-400 flex items-center justify-center hover:bg-blue-500/20 transition-colors text-xs font-bold"
           whileTap={{ scale: 0.92 }}
           title="Richieste"
         >
           R
         </motion.button>
+
         <motion.button
           type="button"
           onClick={onDelete}
           disabled={isSelf}
           className={`w-8 h-8 rounded-md bg-danger/10 border border-danger/30 text-danger flex items-center justify-center hover:bg-danger/20 transition-colors ${
-            isSelf ? 'opacity-40 cursor-not-allowed' : ''
+            isSelf
+              ? 'opacity-40 cursor-not-allowed'
+              : ''
           }`}
           whileTap={{ scale: 0.92 }}
           title="Elimina utente"
