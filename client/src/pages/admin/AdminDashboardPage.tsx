@@ -58,8 +58,10 @@ export default function AdminDashboardPage() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const usersRes = await api.get('/api/users');
-      const users: UserItem[] = usersRes.data || [];
+      const usersRes = await api.get('/api/users?limit=100&offset=0');
+
+      const users: UserItem[] = usersRes.data.users || [];
+
       const active = users.filter((u) => u.state !== 'disconnected').length;
       const moving = users.filter((u) => u.state === 'moving').length;
 
@@ -68,6 +70,7 @@ export default function AdminDashboardPage() {
         activeUsers: active,
         movingUsers: moving,
       });
+
       setAllUsers(users);
 
       if (selectedUserIds.size === 0) {

@@ -13,6 +13,7 @@ interface Message {
   sender: 'me' | 'other';
   content: string;
   timestamp: string;
+  sentAt: string;
 }
 
 interface ApiMessage {
@@ -23,15 +24,41 @@ interface ApiMessage {
   sent_at: string;
 }
 
+// Il backend NON restituisce più "username": gli utenti hanno
+// name / surname / email. Niente più campo username da nessuna parte.
 interface UserItem {
   id: number;
   name: string;
   surname: string;
+  email: string;
   state: string;
   is_admin: boolean;
 }
 
+// GET /api/users risponde con un envelope { users, has_next_page },
+// non con un array nudo (era così solo temporaneamente con la build
+// stale del server; ora che è stato ricompilato risponde correttamente).
+interface UsersResponse {
+  users: UserItem[];
+  has_next_page: boolean;
+}
+
 const BROADCAST_ID = 0;
+
+function getDisplayName(user: UserItem): string {
+  const fullName = `${user.name ?? ''} ${user.surname ?? ''}`.trim();
+  return fullName || user.email;
+}
+
+// Il case esatto restituito dal backend per "state" non è garantito
+// (dipende da come è serializzato l'enum lato Rust), quindi confrontiamo
+// in modo case-insensitive invece di assumere 'moving' / 'stopped'.
+function getStateColorClass(state: string): string {
+  const s = (state ?? '').toLowerCase();
+  if (s === 'moving' || s === 'inmovimento' || s === 'in_movimento') return 'bg-emerald-400';
+  if (s === 'stopped' || s === 'fermo') return 'bg-amber-400';
+  return 'bg-neutral-600';
+}
 
 export default function AdminMessagesPage() {
   const { userId } = useAuth();
@@ -46,12 +73,17 @@ export default function AdminMessagesPage() {
   useEffect(() => {
     const fetchUsers = async () => {
       try {
-        const res = await api.get<UsersResponse>('/api/users');
-        const allUsers = res.data.users || [];
-        const nonAdmin = allUsers.filter((u: any) => u.is_admin === false);
-        setUsers(nonAdmin);
+        const res = await api.get<UsersResponse>('/api/users', {
+          params: {
+            is_admin: false,
+            limit: 100,
+            offset: 0,
+          },
+        });
+        setUsers(res.data.users || []);
       } catch (e: any) {
         console.error('Errore fetch users:', e.response?.status, e.response?.data);
+        setUsers([]);
       } finally {
         setLoading(false);
       }
@@ -92,7 +124,7 @@ export default function AdminMessagesPage() {
     try {
       const res = await api.get('/api/messages?limit=50');
       const apiMessages: ApiMessage[] = (res.data || []).filter(
-        (m) => m.sender_id === null && m.recipient_id === null
+        (m: ApiMessage) => m.sender_id === null && m.recipient_id === null
       );
 
       const formatted: Message[] = apiMessages.map((msg) => ({
@@ -103,7 +135,6 @@ export default function AdminMessagesPage() {
           hour: '2-digit',
           minute: '2-digit',
         }),
-        sentAt: msg.sent_at,
       }));
 
       setMessages(formatted);
@@ -157,7 +188,7 @@ export default function AdminMessagesPage() {
   };
 
   const filteredUsers = users.filter((u) =>
-    `${u.name} ${u.surname}`.toLowerCase().includes(search.toLowerCase())
+    getDisplayName(u).toLowerCase().includes(search.toLowerCase())
   );
 
   const selectedUser = users.find((u) => u.id === selectedUserId);
@@ -221,18 +252,10 @@ export default function AdminMessagesPage() {
                     <User size={18} className="text-neutral-400" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{user.name} {user.surname}</p>
+                    <p className="text-sm font-medium truncate">{getDisplayName(user)}</p>
                     <p className="text-xs text-muted truncate">ID: {user.id}</p>
                   </div>
-                  <div
-                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                      user.state === 'moving'
-                        ? 'bg-emerald-400'
-                        : user.state === 'stopped'
-                        ? 'bg-amber-400'
-                        : 'bg-neutral-600'
-                    }`}
-                  />
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getStateColorClass(user.state)}`} />
                 </motion.button>
               ))
             )}
@@ -253,7 +276,7 @@ export default function AdminMessagesPage() {
             chatId={selectedUserId}
             messages={messages}
             onSendMessage={handleSendDirect}
-            title={selectedUser ? `${selectedUser.name} ${selectedUser.surname}` : 'Seleziona un utente'}
+            title={selectedUser ? getDisplayName(selectedUser) : 'Seleziona un utente'}
             icon={<User size={18} className="text-neutral-300" />}
             status={selectedUser?.state || 'Offline'}
           />

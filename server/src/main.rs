@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // --- Server HTTPS ---
-    let tls_config = tls::load_or_explain("georuggine server").await?;
+    let tls_config = tls::load_or_explain("georuggine_server").await?;
     let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
     tracing::info!("Server HTTPS in ascolto su https://{addr}");
 
