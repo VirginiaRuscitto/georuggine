@@ -91,10 +91,12 @@ async fn build_report(state: &AppState, user_id: i64, period: ReportPeriod) -> R
     // `windows(2)` per calcolare le distanze tra punti consecutivi).
     positions.sort_by_key(|p| p.recorded_at);
 
-    let last_known_position = positions.last().copied();
-
     let (movement_duration_secs, pause_duration_secs) = compute_durations(&sessions, start, end);
     let segments = build_segments(&sessions, &positions);
+    let last_known_position = segments
+        .iter()
+        .filter_map(|segment| segment.last().copied())
+        .max_by_key(|p| p.recorded_at);
     let avg_speed_kmh = compute_avg_speed_kmh(&segments, movement_duration_secs);
 
     Json(RouteReport {
