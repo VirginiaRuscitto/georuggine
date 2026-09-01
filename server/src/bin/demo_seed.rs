@@ -73,12 +73,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     // 8 = Sara Greco
     // 9 = Davide Bruno
 
+    //TODO: aggiustare gli orari in base alla presentazione del progetto
+
     let messages = [
         // BROADCAST
         (
             None,
             None,
-            "Benvenuti su GeoRuggine! Questo è un messaggio in brodcast.",
+            "Benvenuti su GeoRuggine! Questo è un messaggio in broadcast.",
+            "2026-08-18 08:00:00",
         ),
 
         // LUCA (3)
@@ -86,6 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(3),
             None,
             "Ho fatto un incidente.",
+            "2026-08-19 18:30:00",
         ),
 
         // CHIARA (4)
@@ -93,29 +97,34 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(4),
             None,
             "Buongiorno, l'indirizzo indicato su un pacco non esiste.",
+            "2026-08-20 16:05:00",
         ),
         (
             None,
             Some(4),
             "Ciao Chiara, sto verificando il problema. Puoi indicarmi l'indirizzo riportato sul pacco?",
+            "2026-08-20 16:06:42",
         ),
         (
             Some(4),
             None,
             "Via Roma 125, ma sul navigatore la numerazione si ferma prima.",
+            "2026-08-20 16:10:18",
         ),
         (
             None,
             Some(4),
             "Ok, verifico l'indirizzo e ti faccio sapere come procedere con la consegna.",
-        ),
+            "2026-08-20 16:12:03",
+    ),
 
 
         // ANDREA (5)
-        (      
+        (
             None,
             Some(5),
             "Sei in ritardo con le consegne?",
+            "2026-08-25 16:50:00",
         ),
 
         // FRANCESCA (6)
@@ -123,16 +132,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(6),
             None,
             "Non riesco a visualizzare correttamente la mappa.",
+            "2026-08-24 09:12:00",
         ),
         (
             None,
             Some(6),
             "Ciao Francesca, grazie della segnalazione. Puoi provare a ricaricare la pagina?",
+            "2026-08-24 09:13:36",
         ),
         (
             Some(6),
             None,
             "Ho provato e adesso funziona. Grazie!",
+            "2026-08-24 09:17:21",
         ),
 
         // MATTEO (7)
@@ -140,6 +152,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(7),
             None,
             "Ho completato il percorso previsto.",
+            "2026-08-31 08:45:00",
         ),
 
         // SARA (8)
@@ -147,11 +160,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             None,
             Some(8),
             "Ciao Sara, hai per caso dei problemi di connessione?",
+            "2026-08-26 10:05:00",
         ),
         (
             None,
             Some(8),
             "Se leggi questo messaggio rispondi per favore.",
+            "2026-08-26 10:07:18",
         ),
 
         // DAVIDE (9)
@@ -159,23 +174,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(9),
             None,
             "Buongiorno, si è bucata una gomma",
+            "2026-08-29 17:30:00",
         ),
         (
             None,
             Some(9),
             "Mando subito un meccanico.",
+            "2026-08-29 17:32:11",
         ),
     ];
 
-    for (sender_id, recipient_id, content) in messages {
+    for (sender_id, recipient_id, content, sent_at) in messages {
         conn.execute(
             r#"
             INSERT INTO messages
-                (sender_id, recipient_id, content)
+                (sender_id, recipient_id, content, sent_at)
             VALUES
-                (?1, ?2, ?3)
+                (?1, ?2, ?3, ?4)
             "#,
-            (sender_id, recipient_id, content),
+            (sender_id, recipient_id, content, sent_at),
         )?;
     }
 
