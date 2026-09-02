@@ -187,7 +187,7 @@ pub fn get_all_users(
 
     query.push_str(&format!(" ORDER BY {field} {dir}"));
 
-    let limit_val = limit.unwrap_or(100);
+    let limit_val = limit.unwrap_or(10).min(100);
     let offset_val = offset.unwrap_or(0);
 
     query.push_str(" LIMIT ? OFFSET ? ");

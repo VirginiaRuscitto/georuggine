@@ -40,7 +40,7 @@ interface NewUserForm {
 
 interface UsersResponse {
   users: UserItem[];
-  has_next_page: boolean;
+  tot_pages: number;
 }
 
 const EMPTY_FORM: NewUserForm = {
@@ -88,7 +88,7 @@ export default function AdminUsersPage() {
   const filterRef = useRef<HTMLDivElement>(null);
 
   const [page, setPage] = useState(0);
-  const [hasNextPage, setHasNextPage] = useState(false);
+  const [totPages, setTotPages] = useState(0);
 
   useEffect(() => {
     const onClickOutside = (e: MouseEvent) => {
@@ -140,11 +140,11 @@ export default function AdminUsersPage() {
 
       const data = res.data;
       setUsers(data.users || []);
-      setHasNextPage(Boolean(data.has_next_page));
+      setTotPages(data.tot_pages);
     } catch (e) {
       console.error('Errore fetch users:', e);
       setUsers([]);
-      setHasNextPage(false);
+      setTotPages(0);
     } finally {
       setLoading(false);
     }
@@ -458,12 +458,12 @@ export default function AdminUsersPage() {
                 Precedente
               </button>
 
-              <span className="text-sm text-neutral-400">Pagina {page + 1}</span>
+              <span className="text-sm text-neutral-400">Pagina {page + 1} di {totPages}</span>
 
               <button
                 type="button"
                 className="btn-secondary"
-                disabled={!hasNextPage || loading}
+                disabled={ page == totPages-1 || loading}
                 onClick={() => setPage((p) => p + 1)}
               >
                 Successiva
