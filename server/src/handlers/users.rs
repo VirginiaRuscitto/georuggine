@@ -18,6 +18,7 @@ use crate::{
     auth,
     auth::Claims,
 };
+use crate::models::MovementState;
 
 #[derive(Serialize, Clone)]
 pub struct UserStatus {
@@ -50,7 +51,7 @@ pub struct UsersQuery {
     pub order_by_dir: Option<OrderDirection>,
     pub search: Option<String>,
     pub is_admin: Option<bool>,
-    pub state: Option<UserState>,
+    pub state: Option<MovementState>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }
@@ -58,7 +59,7 @@ pub struct UsersQuery {
 #[derive(Serialize)]
 pub struct UsersResponse {
     pub users: Vec<UserStatus>,
-    pub has_next_page: bool,
+    pub tot_pages: usize,
 }
 
 /// GET /api/users
@@ -70,16 +71,15 @@ pub async fn get_users_handler(
     let limit = params.limit.unwrap_or(10).min(100) as usize;
     let offset = params.offset.unwrap_or(0) as usize;
 
-    // La paginazione viene fatta dopo il filtro dello stato,
-    // perché lo stato vive in ActiveUsers e non nel database.
     let users = match users_dao::get_all_users(
         &state.db,
         params.search,
         params.order_by_field,
         params.order_by_dir,
         params.is_admin,
-        None,
-        None,
+        params.state,
+        Some( limit as u32 ),
+        Some( offset as u32 ),
     ) {
         Ok(u) => u,
         Err(e) => {
@@ -91,47 +91,11 @@ pub async fn get_users_handler(
         }
     };
 
-    let active = state.active_users.read().unwrap();
-
-    let filtered: Vec<UserStatus> = users
-        .into_iter()
-        .map(|u| {
-            let user_state = active
-                .get(&u.id)
-                .map(|s| s.state)
-                .unwrap_or(UserState::Disconnected);
-
-            UserStatus {
-                id: u.id,
-                name: u.name,
-                surname: u.surname,
-                email: u.email,
-                created_at: u.created_at,
-                state: user_state,
-                is_admin: u.is_admin,
-            }
-        })
-        .filter(|u| {
-            match params.state {
-                None => true,
-                Some(state_filter) => u.state == state_filter,
-            }
-        })
-        .collect();
-
-    let end = (offset + limit + 1).min(filtered.len());
-
-    let has_next_page = end > offset + limit;
-
-    let users = if offset >= filtered.len() {
-        Vec::new()
-    } else {
-        filtered[offset..end.min(offset + limit)].to_vec()
-    };
+    let tot_pages = users_dao::get_tot_pages(&state.db, limit).expect("tot_pages not found");
 
     Json(UsersResponse {
         users,
-        has_next_page,
+        tot_pages,
     })
     .into_response()
 }

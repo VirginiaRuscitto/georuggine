@@ -1,7 +1,9 @@
+use std::env;
 use crate::database::connection::SharedDb;
-use crate::models::{NewUser, User};
+use crate::models::{MovementState, NewUser, User};
 use rusqlite::{params, params_from_iter, OptionalExtension, Result, Row, ToSql};
 use serde::Deserialize;
+use crate::handlers::users::UserStatus;
 
 fn row_to_user(row: &Row) -> Result<User> {
     Ok(User {
@@ -10,6 +12,17 @@ fn row_to_user(row: &Row) -> Result<User> {
         surname: row.get("surname")?,
         email: row.get("email")?,
         created_at: row.get("created_at")?,
+        is_admin: row.get::<_, i64>("is_admin")? != 0,
+    })
+}
+fn row_to_user_status(row: &Row) -> Result<UserStatus> {
+    Ok(UserStatus {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        surname: row.get("surname")?,
+        email: row.get("email")?,
+        created_at: row.get("created_at")?,
+        state: row.get("state")?,
         is_admin: row.get::<_, i64>("is_admin")? != 0,
     })
 }
@@ -91,15 +104,46 @@ pub fn get_all_users(
     order_by_field: Option<OrderByField>,
     order_by_dir: Option<OrderDirection>,
     is_admin: Option<bool>,
+    state: Option<MovementState>,
     limit: Option<u32>,
     offset: Option<u32>,
-) -> Result<Vec<User>> {
+) -> Result<Vec<UserStatus>> {
     let mut query = String::from(
-        "SELECT id, name, surname, email, created_at, is_admin FROM users"
+        "WITH user_latest_sessions AS (
+                SELECT
+                    u.id,
+                    u.name,
+                    u.surname,
+                    u.email,
+                    u.created_at,
+                    u.is_admin,
+                    (
+                        SELECT ms.state
+                        FROM movement_sessions ms
+                        WHERE ms.user_id = u.id
+                          AND (
+                            ms.ended_at >= datetime('now', ?) OR
+                            ms.ended_at IS NULL
+                            )
+                        ORDER BY ms.started_at DESC
+                        LIMIT 1
+                    ) AS state
+                FROM users u
+            )
+            SELECT *
+            FROM user_latest_sessions"
     );
 
     let mut conditions: Vec<&str> = Vec::new();
     let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+    let disconnect_secs = env::var("DISCONNECT_AFTER_SECS")
+        .map(|v| v.parse::<i64>().unwrap())
+        .unwrap_or(120);
+
+    let time_modifier = format!("-{} seconds", disconnect_secs);
+
+    params.push(Box::new(time_modifier));
 
     // 1. Search Filter
     if let Some(s) = search {
@@ -122,6 +166,12 @@ pub fn get_all_users(
         params.push(Box::new(admin));
     }
 
+    // 3. State Filter
+    if let Some(state) = state {
+        conditions.push("state = ?");
+        params.push(Box::new(state));
+    }
+
     if !conditions.is_empty() {
         query.push_str(" WHERE ");
         query.push_str(&conditions.join(" AND "));
@@ -137,17 +187,12 @@ pub fn get_all_users(
 
     query.push_str(&format!(" ORDER BY {field} {dir}"));
 
-    // La paginazione viene applicata solo quando richiesta.
-    // Il filtro state viene invece applicato dal handler,
-    // perché lo stato non è salvato nella tabella users.
-    if let Some(limit_val) = limit {
-        let limit_val = limit_val.min(100);
-        let offset_val = offset.unwrap_or(0);
+    let limit_val = limit.unwrap_or(100);
+    let offset_val = offset.unwrap_or(0);
 
-        query.push_str(" LIMIT ? OFFSET ?");
-        params.push(Box::new(limit_val));
-        params.push(Box::new(offset_val));
-    }
+    query.push_str(" LIMIT ? OFFSET ? ");
+    params.push(Box::new(limit_val));
+    params.push(Box::new(offset_val));
 
     let conn = db.lock().unwrap();
 
@@ -155,12 +200,18 @@ pub fn get_all_users(
 
     let rows = stmt.query_map(
         params_from_iter(params.iter()),
-        row_to_user,
+        row_to_user_status,
     )?;
 
     rows.collect()
 }
 
+pub fn get_tot_pages(db: &SharedDb, page_size: usize) -> Result<usize> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare("SELECT (COUNT(*) + ?1 - 1) / ?1 FROM users")?;
+    let total_pages: usize = stmt.query_row([page_size], |row| row.get(0))?;
+    Ok(total_pages)
+}
 pub fn delete_user(db: &SharedDb, user_id: i64) -> Result<bool> {
     let conn = db.lock().unwrap();
     let rows_affected = conn.execute(

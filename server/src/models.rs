@@ -11,6 +11,25 @@ pub enum UserState {
     Moving,
 }
 
+impl FromSql for UserState {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(bytes) => {
+                let text = std::str::from_utf8(bytes)
+                    .map_err(|e| FromSqlError::Other(Box::new(e)))?;
+
+                match text {
+                    "stopped" => Ok(UserState::Stopped),
+                    "moving" => Ok(UserState::Moving),
+                    _ => Ok(UserState::Disconnected),
+                }
+            }
+
+            _ => Ok(UserState::Disconnected),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User {
     pub id: i64,
