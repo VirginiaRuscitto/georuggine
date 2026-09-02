@@ -1,4 +1,4 @@
-  # Manuale dello sviluppatore
+# Manuale dello sviluppatore
 
 ## 1.Introduzione
 
@@ -35,6 +35,8 @@ Il progetto è compatibile con le piattaforme Windows e Linux.
 
 ### 1.3 Struttura del database
 
+Le tabelle del database possono essere create tramite lo script `init_db` presente nella cartella `bin` del server.
+
 - Tabella **users** - (id (PK), name, surname, email (UNIQUE), is_admin (CHECK: 0 | 1), password_hash, created_at)
 - Tabella **position_log** - (id (PK), user_id (FK -> users.id), lat (CHECK: -90 <= lat <= 90), lon (CHECK: -180 <= lon <= 180), recorded_at) - idx_position_log_user_time (user_id, recorded_at)
 - Tabella **movement_sessions** - (id (PK), user_id (FK -> users.id), state (CHECK: stopped | moving), started_at, ended_at (CHECK: ended_at IS NULL OR ended_at >= started_at)) - idx_movement_sessions_user_time (user_id, started_at)
@@ -61,29 +63,11 @@ Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separat
   npm install
   npm run dev
   ```
-
 - **Demo**
-
   ```bash
-  # 0. una tantum: avvia via Docker l'istanza locale di OSRM su localhost:5000
-  ./setup_osrm.sh          # oppure, su Windows: .\setup_osrm.ps1
-  
-  # 1. una tantum: genera l'elenco delle destinazioni (kebab di Torino)
-  MAPS_API_KEY="your_actual_api_key" cargo run --bin find_kebabs
-  
-  # 2. crea 20 utenti di test (password Password123! per tutti)
-  cargo run --bin create_users
-  
-  # 3. genera i tragitti di 5 utenti simulati per 60 minuti (richiede OSRM avviato al passo 0)
-  cargo run --bin bake_simulation 60 5
-  
-  # 4. riproduce la simulazione via MQTT a velocità normale (1x)
+  cd fleet_simulation
   cargo run --bin replay
   ```
-
-  Al termine, il database del server risulterà popolato con posizioni, sessioni di movimento e messaggi realistici per tutti gli utenti di test, utilizzabili per verificare manualmente report, mappe e messaggistica lato admin.
-
-  > Attenzione: se bake_simulation è già stato runnato e quindi i file "position.csv" e "messages.csv" sono già stati popolati basterà runnare ``` cargo run --bin replay ```
 
 TODO dimensione applicazione 
 
@@ -707,71 +691,69 @@ L'output viene generato nella cartella `dist/` e può essere servito da qualsias
 
 ## 10. Demo
 
-### 10.0 Elenco dei file
-Per popolare il sistema con dati realistici e verificarne il funzionamento end-to-end (registrazione utenti, invio posizioni via MQTT, invio messaggi, generazione dei report) è disponibile un piccolo progetto Rust separato, organizzato come una serie di binari (`src/bin/*.rs`) più due moduli di libreria condivisi (`mqtt.rs`, `osrm.rs`). Questi script non fanno parte del server, ma agiscono da **client di simulazione**: creano utenti reali tramite le API REST del server, generano tragitti realistici su rete stradale e riproducono via MQTT il traffico che normalmente verrebbe generato da veicoli reali.
+Per verificare il funzionamento end-to-end del sistema, il database può essere popolato con dati realistici. A tale scopo, il database fornito è già pre-popolato con dati di demo. Gli utenti e i messaggi vengono inseriti tramite lo script `demo_seed` nella cartella `bin` del server, mentre le posizioni utilizzate nella demo live sono gestite dal progetto `fleet_simulation`. Le posizioni storiche, invece, vengono generate da `fleet_simulation` e successivamente salvate tramite lo script `generate_report`. 
 
-> **Importante:** tutti gli utenti creati dagli script di simulazione (compreso l'admin usato per autenticarsi) hanno la password `Password123!`. È necessario che questa password coincida con quella già presente nel database del server (o che l'utente admin venga creato con questa password), altrimenti le chiamate a `/api/login` effettuate dagli script falliscono.
+Di seguito viene descritto il funzionamento del progetto `fleet_simulation`.
+
+### 10.1 Elenco dei file
+
+ Il progetto `fleet_simulation` è organizzato come una serie di binari (`src/bin/*.rs`) più due moduli di libreria condivisi (`mqtt.rs`, `osrm.rs`). Questi script non fanno parte del server, ma agiscono da client di simulazione: creano utenti reali tramite le API REST del server (funzionalità non utilizzata in questa demo), generano tragitti realistici su rete stradale e riproducono via MQTT il traffico che normalmente verrebbe generato da veicoli reali.
 
 | File | A cosa serve |
 | --- | --- |
-| `find_kebabs.rs` | Interroga Google Places e genera `kebab_torino_google.csv`, l'elenco delle destinazioni usate nella simulazione. |
+| `find_kebabs.rs` | Interroga Google Places e genera `kebab_torino_google.csv`, contenente l'elenco delle destinazioni usate nella simulazione. |
 | `create_users.rs` | Crea 20 utenti di test tramite `POST /api/register`, tutti con password `Password123!`. |
-| `bake_simulation.rs` | Precalcola i tragitti di tutti gli utenti (via OSRM) e li salva in `positions.csv` e `messages.csv`. |
-| `replay.rs` | Legge `positions.csv` e `messages.csv` e reinvia gli eventi al server via MQTT rispettando la timeline originale. |
+| `bake_simulation.rs` | Precalcola i tragitti di tutti gli utenti tramite OSRM e li salva in `positions.csv` e `messages.csv`. |
+| `bake_history.rs` | Genera lo storico delle posizioni degli utenti del seed e lo salva in `history_positions.csv` |
+| `replay.rs` | Legge `positions.csv` e `messages.csv` e invia gli eventi al server via MQTT rispettando la timeline originale. |
 | `osrm.rs` | Modulo condiviso che interroga OSRM per calcolare tragitti reali su strada e ne simula l'avanzamento nel tempo. |
-| `mqtt.rs` | Modulo condiviso che gestisce la connessione TLS al broker MQTT e la pubblicazione di posizioni/messaggi. |
+| `mqtt.rs` | Modulo condiviso che gestisce la connessione TLS al broker MQTT e la pubblicazione di posizioni e messaggi. |
 | `setup_osrm.sh` | Script Bash (Linux/macOS/WSL) che avvia via Docker l'istanza locale di OSRM necessaria a `bake_simulation.rs`. |
 | `setup_osrm.ps1` | Equivalente PowerShell nativo dello script precedente, per Windows senza WSL. |
-| `generate_report.rs` | Unico file che si trova nel crate `georuggine` permette di inserire direttamente nel db i dati di generati da `bake_simulation.rs` a partire da un timestamp specificato da linea di comando |
 
-### 10.1 Funzionamento complessivo
+### 10.2 Funzionamento complessivo
 
-Il core della simulazione avviene dentro `bake_simulation.rs` che interroga i dati generati da `find_kebabs.rs` (locali con la parola chiave "kebab" in un raggio di 10 km dal centro di Torino), e fa muovere gli utenti da un punto A ad un punto B, scelti casualmente;
-Lo spostamento viene simulato grazie ad `osrm.rs` che gestisce il calcolo dei tragitti reali e calcola delle posizioni realistiche del veicolo lungo il tragitto, tenendo conto anche della velocità media lungo il percorso.
-I dati generati da `bake_simulation.rs` vengono poi usati da `replay.rs` per inviare al server i dati relativi agli utenti secondo la timeline precalcolata. 
+Il core della simulazione è `bake_simulation.rs` che interroga i dati generati da `find_kebabs.rs` (locali con la parola chiave "kebab" in un raggio di 10 km dal centro di Torino), e fa muovere gli utenti da un punto A ad un punto B, scelti casualmente all'interno del dataset. Lo spostamento viene simulato tramite `osrm.rs`, che calcola tragitti reali sulla rete stradale e determina posizioni realistiche del veicolo lungo il percorso, tenendo conto anche della velocità media. I dati generati da `bake_simulation.rs` vengono infine usati da `replay.rs`, che invia al server gli eventi relativi agli utenti seguendo la timeline precedentemente calcolata.
 
-### 10.2 `find_kebabs.rs` — generazione del dataset di destinazioni
+### 10.3 `find_kebabs.rs` — generazione del dataset di destinazioni
 
-Script una tantum che interroga le **Google Places API** (endpoint `nearbysearch`) cercando locali con la parola chiave "kebab" in un raggio di 10 km dal centro di Torino (coordinate `45.0703, 7.6869`). Gestisce la paginazione dei risultati tramite `next_page_token` (con la pausa di 2 secondi richiesta da Google prima di poter riutilizzare il token) e scrive il risultato in `kebab_torino_google.csv`, con colonne `name`, `lat`, `lon`.
+`find_kebabs.rs` è uno script eseguito una tantum che interroga le Google Places API tramite l'endpoint `nearbysearch`, cercando locali con la parola chiave "kebab" in un raggio di 10 km dal centro di Torino (coordinate `45.0703, 7.6869`). Lo script gestisce la paginazione dei risultati tramite `next_page_token`, rispettando la pausa di 2 secondi richiesta da Google prima di poter riutilizzare il token. Il risultato viene salvato nel file `kebab_torino_google.csv`, con le colonne `name`, `lat`, `lon`.
 
+### 10.4 `replay.rs` — invio della simulazione via MQTT
 
+`replay.rs` legge `positions.csv` e `messages.csv` (di default nella cartella corrente, oppure da percorsi passati da riga di comando) e reinvia tutti gli eventi al server rispettando, per ciascun utente, la stessa sequenza temporale con cui sono stati generati da `bake_simulation`.
 
-### 10.3 `replay.rs` — invio della simulazione via MQTT
-
-Legge `positions.csv` e `messages.csv` (di default nella cartella corrente, oppure percorsi passati da riga di comando) e reinvia tutti gli eventi al server rispettando, per ciascun utente, la stessa sequenza temporale con cui sono stati generati da `bake_simulation`:
-
+Esempi di utilizzo:
 ```bash
 cargo run --bin replay                              # velocità normale (1x, consigliata)
 cargo run --bin replay -- 15                         # 15x più veloce, solo per debug
 cargo run --bin replay -- 15 positions.csv messages.csv
 ```
-
 Il primo argomento opzionale è uno `speed_factor`: gli offset temporali letti dal CSV vengono divisi per questo valore, permettendo di comprimere una simulazione di ore in pochi minuti reali.
 
-> **Importante:** lo `speed_factor` serve solo per il debug, ad esempio per verificare rapidamente che un'intera simulazione venga riprodotta correttamente senza dover attendere il tempo reale corrispondente. Una simulazione pensata per essere effettivamente utilizzata (report, demo, verifica del comportamento del server con un carico realistico) va invece eseguita a velocità normale (`speed_factor = 1`, cioè senza passare l'argomento). Velocità più alte comprimono gli intervalli tra gli eventi al di sotto di quanto previsto dal comportamento reale di un utente (ad es. il rate limit di 1 messaggio/secondo lato server, vedi §10.6), quindi possono produrre messaggi scartati o non rispettare il vincolo di una position log ogni 30 secondi.
+> **Importante:** lo `speed_factor` serve solo per il debug, ad esempio per verificare rapidamente che un'intera simulazione venga riprodotta correttamente senza dover attendere il tempo reale corrispondente. Una simulazione pensata per essere effettivamente utilizzata (report, demo o verifica del comportamento del server con un carico realistico) va invece eseguita a velocità normale (`speed_factor = 1`, cioè senza passare l'argomento). Velocità più alte comprimono gli intervalli tra gli eventi al di sotto di quanto previsto dal comportamento reale di un utente. Ad esempio, il rate limit di 1 messaggio al secondo lato server (vedi §10.6) potrebbe causare lo scarto di alcuni messaggi. Inoltre, una velocità superiore a quella reale potrebbe non rispettare il vincolo di una registrazione della posizione ogni 30 secondi.
 
-### 10.4 `generate_report.rs` — inserimento dei dati nel db
+### 10.5 `generate_report.rs` — inserimento dei dati nel db
 
-Questo script permette di inserire nel database dati nel passato, simulando le attività degli utenti senza dover aspettare che avvengano in tempo reale, accedendo direttamente al database.
+Lo script `generate_report.rs` permette di inserire nel database dati relativi a un momento passato, simulando le attività degli utenti senza dover attendere che avvengano in tempo reale.
 
-Quindi per usarlo, da dentro la directory `G23/server`: 
+Per utilizzarlo, dalla directory `G23/server` è possibile eseguire:
 ```bash
 cargo run --bin generate_report nome_file.csv timestamp
 ```
+con il timestamp specificato in ISO 8601.
 
-con il timestamp specificato in ISO 8601;
+Le posizioni contenute nel file csv vengono inserite seguendo la timeline generata da `bake_simulation.rs` (o `bake_history.rs`), a partire dal timestamp specificato.
 
-Le posizioni contenute nel file csv sarannò inserite seguendo la timeline generata da `bake_simulation.rs`, a partire dal timestamp specificato.
+### 10.6 Dipendenza da OSRM
 
-### 10.5 Dipendenza da OSRM
-
-`osrm.rs` (usato solo da `bake_simulation`) non è un binario a sé ma un modulo condiviso che genera tragitti realistici su strada invece di semplici linee rette tra due coordinate. Richiede un'istanza locale del progetto **OSRM** (Open Source Routing Machine) raggiungibile su `http://localhost:5000`.
+`osrm.rs` (usato solo da `bake_simulation`) non è un binario a sé ma un modulo condiviso che genera tragitti realistici su strada invece di semplici linee rette tra due coordinate. Richiede un'istanza locale del progetto OSRM (Open Source Routing Machine) raggiungibile su `http://localhost:5000`.
 
 Questa istanza locale non viene avviata dagli script Rust: va predisposta a parte tramite Docker, come descritto nel paragrafo seguente.
 
-### 10.4.1 `setup_osrm.sh` / `setup_osrm.ps1` — avvio dell'istanza OSRM locale
+#### 10.6.1 `setup_osrm.sh` / `setup_osrm.ps1` — avvio dell'istanza OSRM locale
 
-Sono due script di infrastruttura (uno per Linux/macOS/WSL in Bash, uno equivalente per Windows in PowerShell nativo) che preparano ed avviano, tramite **Docker**, l'istanza OSRM richiesta da `bake_simulation.rs`. Non fanno parte della pipeline Rust e vanno eseguiti manualmente **una sola volta**, prima di lanciare `bake_simulation`, dalla cartella in cui si vuole conservare l'estratto della mappa:
+`setup_osrm.sh` e `setup_osrm.ps1` sono due script di infrastruttura (uno per Linux/macOS/WSL in Bash, uno equivalente per Windows in PowerShell nativo) che preparano ed avviano, tramite Docker, l'istanza OSRM richiesta da `bake_simulation.rs`. Non fanno parte della pipeline Rust e vanno eseguiti manualmente una sola volta, prima di lanciare `bake_simulation`, dalla cartella in cui si vuole conservare l'estratto della mappa:
 
 ```bash
 # Linux / macOS / WSL / Git Bash
@@ -782,3 +764,51 @@ Sono due script di infrastruttura (uno per Linux/macOS/WSL in Bash, uno equivale
 # Windows, PowerShell nativo (non richiede WSL)
 .\setup_osrm.ps1
 ```
+
+### 10.7 Esecuzione della demo
+
+Per eseguire la simulazione completa, i passaggi principali sono i seguenti:
+```bash
+# 0. Una tantum: avvia tramite Docker l'istanza locale di OSRM su localhost:5000
+./setup_osrm.sh          # oppure, su Windows: .\setup_osrm.ps1
+
+# 1. Una tantum: genera l'elenco delle destinazioni (kebab di Torino)
+MAPS_API_KEY="your_actual_api_key" cargo run --bin find_kebabs
+
+# 2. Crea 20 utenti di test
+#    (password Password123! per tutti)
+cargo run --bin create_users
+
+# 3. Genera i tragitti di 5 utenti simulati per 60 minuti
+#    (richiede OSRM avviato al passo 0)
+cargo run --bin bake_simulation 60 5
+
+# 4. Riproduce la simulazione via MQTT a velocità normale (1x)
+cargo run --bin replay
+```
+In alternativa, se si desidera generare dati storici senza eseguire la simulazione in tempo reale, è possibile utilizzare `bake_history.rs` per generare il file CSV contenente le posizioni storiche e successivamente inserirle nel database tramite `generate_report.rs`.
+
+### 10.8 Dati utilizzati nella demo
+
+La password utilizzata per tutti gli utenti è `Password123!`.
+
+| Mail | Admin | Storico messaggi | Storico posizioni | Posizioni live per 2 ore |
+|---|---|---|---|---|
+| marco.rossi@example.com | Si | - | - | - |
+| giulia.bianchi@example.com | Si | - | - | - |
+| luca.ferrari@example.com | No | Solo utente | Si | No |
+| chiara.romano@example.com | No | Utente e server | Si | No |
+| andrea.colombo@example.com | No | Solo server | Si | No |
+| francesca.ricci@example.com | No | Utente e server | Si | No |
+| matteo.marino@example.com | No | Solo utente | Si | No |
+| sara.greco@example.com | No | Solo server | Si | No |
+| davide.bruno@example.com | No | Utente e server | Si | No |
+| elisa.gallo@example.com | No | No | No | fermata: 2:00 → 7:00; fermata: 40:00 → 46:30; fermata: 110:30 → 116:30 |
+| simone.conti@example.com | No | No | No | fermata: 41:30 → 47:30 |
+| valentina.deluca@example.com | No | No | No | fermata: 26:30 → 33:00; fermata: 36:30 → 42:00; disconnessione: 55:30 → 61:30 |
+| alessandro.costa@example.com | No | No | No | disconnessione: 15:00 → 20:30; disconnessione: 50:30 → 56:30; disconnessione: 77:30 → 82:30 |
+| martina.giordano@example.com | No | No | No | fermata: 85:00 → 91:00; disconnessione: 67:30 → 73:00 |
+| federico.mancini@example.com | No | No | No | percorso continuo |
+| ilaria.rizzo@example.com | No | No | No | fermata: 24:00 → 29:30 |
+
+È inoltre presente un messaggio in brodcast.
