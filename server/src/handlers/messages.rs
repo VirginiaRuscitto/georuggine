@@ -63,14 +63,14 @@ async fn get_messages_handler(
     let offset = params.offset.unwrap_or(0).max(0);
 
     let result = if claims.is_admin {
-        match params.with {
-            Some(user_id) => {
-                messages_dao::get_direct_conversation(&state.db, user_id, limit, offset)
-            }
-            None => {
-                messages_dao::get_broadcast_messages(&state.db, limit, offset)
-            }
+    match params.with {
+        Some(user_id) => {
+            messages_dao::get_direct_conversation(&state.db, user_id, limit, offset)
         }
+        None => {
+            messages_dao::get_all_direct_messages(&state.db, limit, offset)
+        }
+    }
     } else {
         messages_dao::get_conversation_with_broadcasts(&state.db, claims.sub, limit, offset)
     };

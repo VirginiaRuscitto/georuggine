@@ -24,8 +24,6 @@ interface ApiMessage {
   sent_at: string;
 }
 
-// Il backend NON restituisce più "username": gli utenti hanno
-// name / surname / email. Niente più campo username da nessuna parte.
 interface UserItem {
   id: number;
   name: string;
@@ -35,12 +33,14 @@ interface UserItem {
   is_admin: boolean;
 }
 
-// GET /api/users risponde con un envelope { users, has_next_page },
-// non con un array nudo (era così solo temporaneamente con la build
-// stale del server; ora che è stato ricompilato risponde correttamente).
 interface UsersResponse {
   users: UserItem[];
   has_next_page: boolean;
+}
+
+interface LastMessageInfo {
+  content: string;
+  sentAt: string;
 }
 
 const BROADCAST_ID = 0;
@@ -50,9 +50,6 @@ function getDisplayName(user: UserItem): string {
   return fullName || user.email;
 }
 
-// Il case esatto restituito dal backend per "state" non è garantito
-// (dipende da come è serializzato l'enum lato Rust), quindi confrontiamo
-// in modo case-insensitive invece di assumere 'moving' / 'stopped'.
 function getStateColorClass(state: string): string {
   const s = (state ?? '').toLowerCase();
   if (s === 'moving' || s === 'inmovimento' || s === 'in_movimento') return 'bg-emerald-400';
@@ -68,6 +65,7 @@ export default function AdminMessagesPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [lastMessageByUser, setLastMessageByUser] = useState<Record<number, LastMessageInfo>>({});
 
   // Fetch utenti al mount
   useEffect(() => {
@@ -119,6 +117,38 @@ export default function AdminMessagesPage() {
     }
   }, [selectedUserId, userId]);
 
+  // Ultimo messaggio per utente (per ordinare la sidebar)
+  const fetchLastMessages = useCallback(async () => {
+    try {
+      const res = await api.get('/api/messages?limit=200');
+      const apiMessages: ApiMessage[] = res.data || [];
+
+      const map: Record<number, LastMessageInfo> = {};
+      for (const msg of apiMessages) {
+        const isBroadcast = msg.sender_id === null && msg.recipient_id === null;
+        if (isBroadcast) continue;
+
+        const otherUserId = msg.sender_id !== null ? msg.sender_id : msg.recipient_id;
+        if (otherUserId === null || otherUserId === undefined) continue;
+
+        const existing = map[otherUserId];
+        if (!existing || new Date(msg.sent_at).getTime() > new Date(existing.sentAt).getTime()) {
+          map[otherUserId] = { content: msg.content, sentAt: msg.sent_at };
+        }
+      }
+
+      setLastMessageByUser(map);
+    } catch (e: any) {
+      console.error('Errore fetch ultimi messaggi:', e.response?.status, e.response?.data);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLastMessages();
+    const interval = setInterval(fetchLastMessages, 5000);
+    return () => clearInterval(interval);
+  }, [fetchLastMessages]);
+
   // Fetch broadcast
   const fetchBroadcasts = useCallback(async () => {
     try {
@@ -163,6 +193,7 @@ export default function AdminMessagesPage() {
         content,
       });
       await fetchConversation();
+      await fetchLastMessages(); // <-- AGGIUNTO: aggiorna subito l'ordine in sidebar
     } catch (e: any) {
       console.error('Errore invio diretto:', e.response?.status, e.response?.data);
     }
@@ -172,6 +203,7 @@ export default function AdminMessagesPage() {
     try {
       await api.post('/api/broadcast', { content });
       await fetchBroadcasts();
+      await fetchLastMessages(); // <-- AGGIUNTO: coerenza con la sidebar
     } catch (e: any) {
       console.error('Errore invio broadcast:', e.response?.status, e.response?.data);
     }
@@ -187,9 +219,21 @@ export default function AdminMessagesPage() {
     setBroadcastSelected(true);
   };
 
-  const filteredUsers = users.filter((u) =>
-    getDisplayName(u).toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredUsers = users
+    .filter((u) => getDisplayName(u).toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => {
+      const aTime = lastMessageByUser[a.id]?.sentAt;
+      const bTime = lastMessageByUser[b.id]?.sentAt;
+
+      // Entrambi hanno scritto: più recente primo
+      if (aTime && bTime) return new Date(bTime).getTime() - new Date(aTime).getTime();
+      // Solo a ha scritto: a prima
+      if (aTime) return -1;
+      // Solo b ha scritto: b prima
+      if (bTime) return 1;
+      // Nessuno ha scritto: ordine alfabetico
+      return getDisplayName(a).localeCompare(getDisplayName(b));
+    });
 
   const selectedUser = users.find((u) => u.id === selectedUserId);
 
@@ -253,9 +297,21 @@ export default function AdminMessagesPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{getDisplayName(user)}</p>
-                    <p className="text-xs text-muted truncate">ID: {user.id}</p>
+                    <p className="text-xs text-muted truncate">
+                      {lastMessageByUser[user.id]?.content ?? `ID: ${user.id}`}
+                    </p>
                   </div>
-                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getStateColorClass(user.state)}`} />
+                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                    {lastMessageByUser[user.id] && (
+                      <span className="text-[10px] text-muted">
+                        {new Date(lastMessageByUser[user.id].sentAt).toLocaleTimeString('it-IT', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    )}
+                    <div className={`w-2 h-2 rounded-full ${getStateColorClass(user.state)}`} />
+                  </div>
                 </motion.button>
               ))
             )}

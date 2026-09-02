@@ -64,3 +64,18 @@ pub fn get_conversation_with_broadcasts(db: &SharedDb, user_id: i64, limit: i64,
     messages.reverse();
     Ok(messages)
 }
+
+/// Tutti i messaggi diretti (non broadcast), per l'admin che deve vedere
+/// l'ultima conversazione con ogni utente.
+pub fn get_all_direct_messages(db: &SharedDb, limit: i64, offset: i64) -> Result<Vec<Message>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, sender_id, recipient_id, content, sent_at FROM messages 
+         WHERE NOT (sender_id IS NULL AND recipient_id IS NULL) 
+         ORDER BY sent_at DESC LIMIT ?1 OFFSET ?2",
+    )?;
+    let rows = stmt.query_map(params![limit, offset], row_to_message)?;
+    let mut messages: Vec<Message> = rows.collect::<Result<Vec<_>>>()?;
+    messages.reverse();
+    Ok(messages)
+}
