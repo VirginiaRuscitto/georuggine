@@ -79,7 +79,7 @@ fn build_http_client() -> Client {
 
 async fn get_users(num_users: Option<usize>) -> Result<Vec<User>, Error> {
     let client = build_http_client();
-    let credentials = ("admin@example.com", "Password123!");
+    let credentials = ("marco.rossi@example.com", "Password123!");
 
     let token = client
         .post("https://127.0.0.1:3001/api/login")
@@ -130,9 +130,16 @@ async fn get_users(num_users: Option<usize>) -> Result<Vec<User>, Error> {
     }
 
     let mut rng = rng();
-    users.shuffle(& mut rng);
+    users.shuffle(&mut rng);
 
-    let take: usize = num_users.unwrap_or( users.len() ).min( users.len() );
+    let target_user_ids = [10_i64, 11, 12, 13, 14, 15, 16];
+
+    let users: Vec<User> = users
+        .into_iter()
+        .filter(|user| target_user_ids.contains(&user.id))
+        .collect();
+
+    let take: usize = num_users.unwrap_or(users.len()).min(users.len());
     Ok(users[..take].to_vec())
 }
 
@@ -195,59 +202,66 @@ async fn simulate_user_movement(
                     );
                 }
                 None => {
+                    println!(
+                        "[{}] Destination reached: {}  (sim +{} ms)",
+                        simulator.vehicle_id(),
+                        current_destination_name,
+                        simulated_elapsed_ms
+                    );
+
                     let choice = {
                         let mut rng = rng();
-                        rng.random_range(1..=30)
+                        rng.random_range(1..=100)
                     };
 
                     match choice {
-                        1 => {
-                            println!(
-                                "[{}] Destination reached: {}  (sim +{} ms)",
-                                simulator.vehicle_id(),
-                                current_destination_name,
-                                simulated_elapsed_ms
-                            );
-                            add_message(
-                                MESSAGES_CSV,
-                                user.id,
-                                &user.email,
-                                &format!("destinazione raggiunta: {}", current_destination_name),
-                                simulated_elapsed_ms,
-                                &mut last_msg_time_ms,
-                            )?;
-
-                            let next_kebab = {
+                        // ~10%: sosta "Fermo" osservabile. La transizione in_movimento -> fermo
+                        // scatta dopo 3 min di coordinate invariate: mandiamo quindi 5-6 min
+                        // di posizione ferma ogni 30s, così lo stato ha tempo di scattare
+                        // E di restare visibile per un po' prima di ripartire.
+                        1..=10 => {
+                            let stop_ticks = {
                                 let mut rng = rng();
-                                kebab_shops.choose(&mut rng).unwrap().clone()
+                                rng.random_range(10..=12) // 5-6 min (30s * 10-12 tick)
                             };
-
-                            // Set up next leg and break inner loop
-                            current_origin = current_destination;
-                            current_destination = (next_kebab.lat, next_kebab.lon);
-                            current_destination_name = next_kebab.name.clone();
-                            break;
+                            for _ in 0..stop_ticks {
+                                simulated_elapsed_ms += TICK_SECONDS * 1_000;
+                                add_position(
+                                    POSITIONS_CSV,
+                                    user.id,
+                                    &user.email,
+                                    last_pos.0,
+                                    last_pos.1,
+                                    simulated_elapsed_ms,
+                                    &mut last_pos_time_ms,
+                                )?;
+                            }
                         }
-                        2..15 => {
-                            let next_kebab = {
+                        // ~5%: disconnessione osservabile. Il timeout di disconnessione è 2 min
+                        // di silenzio totale: restiamo in silenzio 4-5 min, così l'utente
+                        // risulta "Disconnesso" abbastanza a lungo da essere visibile nel
+                        // report/dashboard, non solo per un istante al limite della soglia.
+                        11..=15 => {
+                            let disconnect_ticks = {
                                 let mut rng = rng();
-                                kebab_shops.choose(&mut rng).unwrap().clone()
+                                rng.random_range(8..=10) // 4-5 min (30s * 8-10 tick, nessun invio)
                             };
-                            current_origin = (next_kebab.lat, next_kebab.lon);
-                            simulated_elapsed_ms += PAUSE_SECONDS * 1_000;
+                            simulated_elapsed_ms += disconnect_ticks * TICK_SECONDS * 1_000;
                         }
-                        _ => {
-                            add_position(
-                                POSITIONS_CSV,
-                                user.id,
-                                &user.email,
-                                last_pos.0,
-                                last_pos.1,
-                                simulated_elapsed_ms,
-                                &mut last_pos_time_ms,
-                            )?;
-                        }
+                        // ~85%: riparte subito, nessuna sosta
+                        _ => {}
                     }
+
+                    // La nuova gamba parte SEMPRE dall'ultima posizione vera, mai da un
+                    // kebab casuale (fix del teleport).
+                    let next_kebab = {
+                        let mut rng = rng();
+                        kebab_shops.choose(&mut rng).unwrap().clone()
+                    };
+                    current_origin = last_pos;
+                    current_destination = (next_kebab.lat, next_kebab.lon);
+                    current_destination_name = next_kebab.name.clone();
+                    break;
                 }
             }
         }
