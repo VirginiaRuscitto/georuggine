@@ -120,7 +120,7 @@ export default function AdminMessagesPage() {
   // Ultimo messaggio per utente (per ordinare la sidebar)
   const fetchLastMessages = useCallback(async () => {
     try {
-      const res = await api.get('/api/messages?limit=200');
+      const res = await api.get('/api/messages?limit=200&all_direct=true');
       const apiMessages: ApiMessage[] = res.data || [];
 
       const map: Record<number, LastMessageInfo> = {};
@@ -165,6 +165,7 @@ export default function AdminMessagesPage() {
           hour: '2-digit',
           minute: '2-digit',
         }),
+        sentAt: msg.sent_at,
       }));
 
       setMessages(formatted);
