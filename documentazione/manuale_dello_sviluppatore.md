@@ -141,7 +141,7 @@ Il logout viene gestito lato client, eliminando il JWT memorizzato. Non è prese
 
 Il modulo `users.rs` gestisce il recupero e le principali operazioni amministrative sugli utenti.
 
-La funzione `get_users_handler` permette agli amministratori di recuperare l'elenco degli utenti registrati, applicando criteri di ricerca, ordinamento e filtraggio per ruolo amministrativo. La funzione supporta inoltre la paginazione attraverso i parametri `limit`, che determina il numero massimo di utenti restituiti, e `offset`, che indica quanti risultati saltare. Il valore predefinito di `limit` è 10 e viene comunque limitato a un massimo di 100 utenti per richiesta. Lo stato dell'utente viene calcolato tramite i dati contenuti nella tabella `movement_sessions` escludendo tutte le sessioni terminate più di `DISCONNECT_AFTER_SECS` secondi prima dell'esecuzione della query (di default 120 secondi), quindi se un utente non ha sessioni recenti viene considerato disconnected.
+La funzione `get_users_handler` permette agli amministratori di recuperare l'elenco degli utenti registrati, applicando criteri di ricerca, ordinamento e filtraggio per ruolo amministrativo. La funzione supporta inoltre la paginazione attraverso i parametri `limit`, che determina il numero massimo di utenti restituiti, e `offset`, che indica quanti risultati saltare. Il valore predefinito di `limit` è 10 e viene comunque limitato a un massimo di 100 utenti per richiesta. Lo stato dell'utente viene calcolato tramite i dati contenuti nella tabella `movement_sessions` escludendo tutte le sessioni terminate più di `DISCONNECT_AFTER_SECS` secondi prima dell'esecuzione della query (di default 120 secondi), quindi se un utente non ha sessioni recenti viene considerato `Disconnected`.
 
 La funzione `me_handler` permette invece a un generico utente autenticato di recuperare le proprie informazioni, utilizzando l'identificativo contenuto nei `Claims` del JWT.
 
@@ -185,7 +185,7 @@ Il sistema di messaggistica gestisce l'invio e la ricezione di messaggi diretti 
 
 ### 7.1 Invio e recupero dei messaggi tramite HTTPS
 
-Il modulo `messages.rs` espone le route dedicate alla messaggistica. `get_messages_handler` distingue innanzitutto il tipo di richiesta in base al ruolo dell'utente e al parametro `with`. Per un amministratore, `with` identifica l'utente con cui visualizzare la conversazione diretta; se non viene specificato, vengono invece recuperati i soli messaggi broadcast. Per un utente normale non è necessario specificare `with`, perché vengono recuperati automaticamente i messaggi diretti che lo riguardano insieme ai broadcast. Il parametro `limit` stabilisce il numero massimo di messaggi restituiti: se non viene specificato viene utilizzato il valore predefinito di 50. `clamp(1, MAX_LIMIT)` limita comunque il valore tra 1 e 200. La differenza nella gestione delle conversazioni rispecchia le esigenze delle due interfacce: mentre l'amministratore ha le chat con tutti gli utenti, l'utente normale ha solo una chat con l'amministratore. 
+Il modulo `messages.rs` espone le route dedicate alla messaggistica. `get_messages_handler` distingue innanzitutto il tipo di richiesta in base al ruolo dell'utente e al parametro `with`. Per un amministratore, `with` identifica l'utente con cui visualizzare la conversazione diretta; se non viene specificato, vengono invece recuperati i soli messaggi broadcast, a meno che non sia impostato il parametro `all_direct=true`, usato dal frontend per recuperare tutti i messaggi diretti e ordinare di conseguenza la lista delle conversazioni in sidebar.. Per un utente normale non è necessario specificare `with`, perché vengono recuperati automaticamente i messaggi diretti che lo riguardano insieme ai broadcast. Il parametro `limit` stabilisce il numero massimo di messaggi restituiti: se non viene specificato viene utilizzato il valore predefinito di 50. `clamp(1, MAX_LIMIT)` limita comunque il valore tra 1 e 200. La differenza nella gestione delle conversazioni rispecchia le esigenze delle due interfacce: mentre l'amministratore ha le chat con tutti gli utenti, l'utente normale ha solo una chat con l'amministratore. 
 
 L'invio tramite HTTPS è invece riservato agli amministratori: `post_direct_message` verifica l'esistenza del destinatario, salva il messaggio nel database e ne notifica la ricezione tramite MQTT, mentre `post_broadcast_handler` salva e pubblica un messaggio destinato a tutti gli utenti. Entrambe le funzioni utilizzano `validate_content` per verificare che il messaggio non sia vuoto e non superi i 1000 caratteri. I messaggi vengono quindi prima persistiti nel database e solo successivamente notificati tramite MQTT, mantenendo lo storico disponibile anche nel caso in cui la pubblicazione MQTT non vada a buon fine.
 
@@ -476,6 +476,7 @@ L'output viene generato nella cartella `dist/` e può essere servito da qualsias
     - `with`
     - `limit`
     - `offset`
+    - `all_direct`
   - Response 200 OK:
     ```json
     [
@@ -691,7 +692,7 @@ L'output viene generato nella cartella `dist/` e può essere servito da qualsias
 
 ## 10. Demo
 
-Per verificare il funzionamento end-to-end del sistema, il database può essere popolato con dati realistici. A tale scopo, il database fornito è già pre-popolato con dati di demo. Gli utenti e i messaggi vengono inseriti tramite lo script `demo_seed` nella cartella `bin` del server, mentre le posizioni utilizzate nella demo live sono gestite dal progetto `fleet_simulation`. Le posizioni storiche, invece, vengono generate da `fleet_simulation` e successivamente salvate tramite lo script `generate_report`. 
+Per verificare il funzionamento end-to-end del sistema, il database può essere popolato con dati realistici. A tale scopo, il database fornito è già pre-popolato con dati di demo. Gli utenti e i messaggi vengono inseriti tramite lo script `demo_seed` nella cartella `bin` del server, mentre le posizioni utilizzate nella demo live e quelle storiche vengono generate dal progetto `fleet_simulation`. Il progetto utilizza due modalità distinte di generazione dei dati. `bake_simulation` prepara una simulazione destinata ad essere successivamente riprodotta in tempo reale tramite MQTT, mentre `bake_history` genera direttamente uno storico di attività collocate nel passato, da inserire nel database tramite lo script `generate_report` nella cartella `bin` del server.
 
 Di seguito viene descritto il funzionamento del progetto `fleet_simulation`.
 
@@ -703,8 +704,8 @@ Di seguito viene descritto il funzionamento del progetto `fleet_simulation`.
 | --- | --- |
 | `find_kebabs.rs` | Interroga Google Places e genera `kebab_torino_google.csv`, contenente l'elenco delle destinazioni usate nella simulazione. |
 | `create_users.rs` | Crea 20 utenti di test tramite `POST /api/register`, tutti con password `Password123!`. |
-| `bake_simulation.rs` | Precalcola i tragitti di tutti gli utenti tramite OSRM e li salva in `positions.csv` e `messages.csv`. |
-| `bake_history.rs` | Genera lo storico delle posizioni degli utenti del seed e lo salva in `history_positions.csv` |
+| `bake_simulation.rs` | Precalcola i tragitti di tutti gli utenti tramite OSRM e li salva in `positions.csv` e `messages.csv`, che possono poi essere riprodotti da `replay.rs`. |
+| `bake_history.rs` | Genera lo storico delle posizioni degli utenti del seed e lo salva in `history_positions.csv`, pronto per essere inserito nel database da `generate_report`. |
 | `replay.rs` | Legge `positions.csv` e `messages.csv` e invia gli eventi al server via MQTT rispettando la timeline originale. |
 | `osrm.rs` | Modulo condiviso che interroga OSRM per calcolare tragitti reali su strada e ne simula l'avanzamento nel tempo. |
 | `mqtt.rs` | Modulo condiviso che gestisce la connessione TLS al broker MQTT e la pubblicazione di posizioni e messaggi. |
@@ -713,7 +714,11 @@ Di seguito viene descritto il funzionamento del progetto `fleet_simulation`.
 
 ### 10.2 Funzionamento complessivo
 
-Il core della simulazione è `bake_simulation.rs` che interroga i dati generati da `find_kebabs.rs` (locali con la parola chiave "kebab" in un raggio di 10 km dal centro di Torino), e fa muovere gli utenti da un punto A ad un punto B, scelti casualmente all'interno del dataset. Lo spostamento viene simulato tramite `osrm.rs`, che calcola tragitti reali sulla rete stradale e determina posizioni realistiche del veicolo lungo il percorso, tenendo conto anche della velocità media. I dati generati da `bake_simulation.rs` vengono infine usati da `replay.rs`, che invia al server gli eventi relativi agli utenti seguendo la timeline precedentemente calcolata.
+Il progetto utilizza lo stesso sistema di simulazione dei tragitti per due scopi diversi.
+
+Da una parte, `bake_simulation.rs` prepara una simulazione live: interroga i dati generati da `find_kebabs.rs` (locali con la parola chiave "kebab" in un raggio di 10 km dal centro di Torino) e genera gli spostamenti di alcuni utenti tra punti scelti casualmente all'interno del dataset. Lo spostamento viene simulato tramite `osrm.rs`, che calcola tragitti reali sulla rete stradale e determina posizioni realistiche del veicolo lungo il percorso. Le posizioni e gli eventuali messaggi vengono salvati con una timeline relativa e successivamente `replay.rs` riproduce gli eventi via MQTT rispettando tale sequenza temporale.
+
+Dall'altra parte, `bake_history.rs` utilizza lo stesso principio di generazione dei tragitti, ma con uno scopo diverso: produce dati già collocati nel passato. Lo script genera, per gli utenti del seed previsti per lo storico, sessioni distribuite negli ultimi N giorni, con orari di inizio, durata, giorni di attività e pause variabili. Il risultato viene salvato in `history_positions.csv` e può essere inserito direttamente nel database tramite `generate_report.rs`, senza dover riprodurre la simulazione in tempo reale.
 
 ### 10.3 `find_kebabs.rs` — generazione del dataset di destinazioni
 
@@ -743,17 +748,17 @@ cargo run --bin generate_report nome_file.csv timestamp
 ```
 con il timestamp specificato in ISO 8601.
 
-Le posizioni contenute nel file csv vengono inserite seguendo la timeline generata da `bake_simulation.rs` (o `bake_history.rs`), a partire dal timestamp specificato.
+Le posizioni contenute nel file csv vengono inserite seguendo la timeline generata da `bake_history.rs`, a partire dal timestamp specificato.
 
 ### 10.6 Dipendenza da OSRM
 
-`osrm.rs` (usato solo da `bake_simulation`) non è un binario a sé ma un modulo condiviso che genera tragitti realistici su strada invece di semplici linee rette tra due coordinate. Richiede un'istanza locale del progetto OSRM (Open Source Routing Machine) raggiungibile su `http://localhost:5000`.
+`osrm.rs` (usato da `bake_simulation` e `bake_history`) non è un binario a sé ma un modulo condiviso che genera tragitti realistici su strada invece di semplici linee rette tra due coordinate. Richiede un'istanza locale del progetto OSRM (Open Source Routing Machine) raggiungibile su `http://localhost:5000`.
 
 Questa istanza locale non viene avviata dagli script Rust: va predisposta a parte tramite Docker, come descritto nel paragrafo seguente.
 
 #### 10.6.1 `setup_osrm.sh` / `setup_osrm.ps1` — avvio dell'istanza OSRM locale
 
-`setup_osrm.sh` e `setup_osrm.ps1` sono due script di infrastruttura (uno per Linux/macOS/WSL in Bash, uno equivalente per Windows in PowerShell nativo) che preparano ed avviano, tramite Docker, l'istanza OSRM richiesta da `bake_simulation.rs`. Non fanno parte della pipeline Rust e vanno eseguiti manualmente una sola volta, prima di lanciare `bake_simulation`, dalla cartella in cui si vuole conservare l'estratto della mappa:
+`setup_osrm.sh` e `setup_osrm.ps1` sono due script di infrastruttura (uno per Linux/macOS/WSL in Bash, uno equivalente per Windows in PowerShell nativo) che preparano ed avviano, tramite Docker, l'istanza OSRM richiesta dagli script di generazione dei tragitti. Non fanno parte della pipeline Rust e vanno eseguiti manualmente una sola volta, prima di lanciare `bake_simulation`, dalla cartella in cui si vuole conservare l'estratto della mappa:
 
 ```bash
 # Linux / macOS / WSL / Git Bash
@@ -786,7 +791,14 @@ cargo run --bin bake_simulation 60 5
 # 4. Riproduce la simulazione via MQTT a velocità normale (1x)
 cargo run --bin replay
 ```
-In alternativa, se si desidera generare dati storici senza eseguire la simulazione in tempo reale, è possibile utilizzare `bake_history.rs` per generare il file CSV contenente le posizioni storiche e successivamente inserirle nel database tramite `generate_report.rs`.
+In alternativa, se si desidera generare dati storici senza eseguire la simulazione in tempo reale, è possibile utilizzare `bake_history.rs` per generare il file CSV contenente le posizioni storiche e successivamente inserirle nel database tramite `generate_report.rs`. Ad esempio:
+```bash
+# Genera lo storico degli ultimi 30 giorni
+cargo run --bin bake_history 30
+
+# Inserisce lo storico nel database
+cargo run --bin generate_report history_positions.csv timestamp
+```
 
 ### 10.8 Dati utilizzati nella demo
 
@@ -811,4 +823,4 @@ La password utilizzata per tutti gli utenti è `Password123!`.
 | federico.mancini@example.com | No | No | No | percorso continuo |
 | ilaria.rizzo@example.com | No | No | No | fermata: 24:00 → 29:30 |
 
-È inoltre presente un messaggio in brodcast.
+È inoltre presente un messaggio in broadcast.
