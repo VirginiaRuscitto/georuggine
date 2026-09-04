@@ -91,12 +91,21 @@ pub async fn get_users_handler(
         }
     };
 
-    let tot_users = users_dao::get_tot_users(
+    let tot_users = match users_dao::get_tot_users(
         &state.db,
         params.search,
         params.is_admin,
         params.state,
-    ).expect("Impossibile recuperare il numero di uteneti");
+    ) {
+        Ok(total) => total,
+        Err(e) => {
+            tracing::error!("errore get_tot_users: {e}");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Impossibile recuperare il numero di utenti",
+            );
+        }
+    };
 
     let tot_pages: usize = (tot_users + limit - 1) / limit;
 

@@ -55,7 +55,7 @@ interface RouteReport {
 
 interface UsersResponse {
   users: UserItem[];
-  has_next_page: boolean;
+  tot_pages: number;
 }
 
 const DEFAULT_POS: [number, number] = [45.4642, 9.19];

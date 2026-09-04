@@ -19,7 +19,6 @@ interface UserItem {
   id: number;
   name?: string;
   surname?: string;
-  username?: string;
   state: string;
 }
 
@@ -168,7 +167,7 @@ export default function AdminDashboardPage() {
   };
 
   const getUserLabel = (u: UserItem) => {
-    return `${u.name ?? ''} ${u.surname ?? ''}`.trim() || u.username || `Utente #${u.id}`;
+    return `${u.name ?? ''} ${u.surname ?? ''}`.trim() || `Utente #${u.id}`;
   };
 
   const activeUsersForTracking = allUsers.filter((u) => u.state !== 'disconnected');

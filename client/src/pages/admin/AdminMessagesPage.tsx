@@ -35,7 +35,7 @@ interface UserItem {
 
 interface UsersResponse {
   users: UserItem[];
-  has_next_page: boolean;
+  tot_pages: number;
 }
 
 interface LastMessageInfo {

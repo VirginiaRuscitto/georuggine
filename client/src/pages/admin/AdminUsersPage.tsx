@@ -124,8 +124,8 @@ export default function AdminUsersPage() {
   const fetchUsers = async (targetPage: number, searchTerm: string) => {
     setLoading(true);
     try {
-      // L'endpoint risponde con { users, has_next_page }: usiamo
-      // direttamente has_next_page, niente più trucchi lato client.
+        // L'endpoint risponde con { users, tot_pages }: usiamo
+       // direttamente tot_pages, niente più trucchi lato client.
       const res = await api.get<UsersResponse>('/api/users', {
         params: {
           order_by_field: 'name',
@@ -285,12 +285,7 @@ export default function AdminUsersPage() {
               </div>
               <FormField label="Mail" type="email" value={form.email} onChange={(v) => setForm({ ...form, email: v })} />
               <FormField label="Pass" type="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} />
-              <FormField
-                label="Pass"
-                type="password"
-                value={form.confirmPassword}
-                onChange={(v) => setForm({ ...form, confirmPassword: v })}
-              />
+              <FormField label="conferma password" type="password" value={form.confirmPassword} onChange={(v) => setForm({ ...form, confirmPassword: v })} />
 
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none pt-1">
                 <input
