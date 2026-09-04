@@ -20,7 +20,7 @@ use crate::{
 };
 use crate::models::MovementState;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct UserStatus {
     pub id: i64,
     pub name: String,
@@ -73,7 +73,7 @@ pub async fn get_users_handler(
 
     let users = match users_dao::get_all_users(
         &state.db,
-        params.search,
+        params.search.clone(),
         params.order_by_field,
         params.order_by_dir,
         params.is_admin,
@@ -91,7 +91,14 @@ pub async fn get_users_handler(
         }
     };
 
-    let tot_pages = users_dao::get_tot_pages(&state.db, limit).expect("tot_pages not found");
+    let tot_users = users_dao::get_tot_users(
+        &state.db,
+        params.search,
+        params.is_admin,
+        params.state,
+    ).expect("Impossibile recuperare il numero di uteneti");
+
+    let tot_pages: usize = (tot_users + limit - 1) / limit;
 
     Json(UsersResponse {
         users,

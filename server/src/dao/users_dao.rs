@@ -206,11 +206,91 @@ pub fn get_all_users(
     rows.collect()
 }
 
-pub fn get_tot_pages(db: &SharedDb, page_size: usize) -> Result<usize> {
+//get users number filtered by parameter (used to calculate the max number of pages)
+pub fn get_tot_users(
+    db: &SharedDb,
+    search: Option<String>,
+    is_admin: Option<bool>,
+    state: Option<MovementState>,
+)-> Result<usize> {
+    let mut query = String::from(
+        "WITH user_latest_sessions AS (
+                SELECT
+                    u.id,
+                    u.name,
+                    u.surname,
+                    u.email,
+                    u.created_at,
+                    u.is_admin,
+                    (
+                        SELECT ms.state
+                        FROM movement_sessions ms
+                        WHERE ms.user_id = u.id
+                          AND (
+                            ms.ended_at >= datetime('now', ?) OR
+                            ms.ended_at IS NULL
+                            )
+                        ORDER BY ms.started_at DESC
+                        LIMIT 1
+                    ) AS state
+                FROM users u
+            )
+            SELECT COUNT()
+            FROM user_latest_sessions"
+    );
+
+    let mut conditions: Vec<&str> = Vec::new();
+    let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+    let disconnect_secs = env::var("DISCONNECT_AFTER_SECS")
+        .map(|v| v.parse::<i64>().unwrap())
+        .unwrap_or(120);
+
+    let time_modifier = format!("-{} seconds", disconnect_secs);
+
+    params.push(Box::new(time_modifier));
+
+    // 1. Search Filter
+    if let Some(s) = search {
+        if !s.trim().is_empty() {
+            conditions.push(
+                "(name LIKE ? OR surname LIKE ? OR email LIKE ?)"
+            );
+
+            let pattern = format!("%{}%", s.trim());
+
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern));
+        }
+    }
+
+    // 2. Is Admin Filter
+    if let Some(admin) = is_admin {
+        conditions.push("is_admin = ?");
+        params.push(Box::new(admin));
+    }
+
+    // 3. State Filter
+    if let Some(state) = state {
+        conditions.push("state = ?");
+        params.push(Box::new(state));
+    }
+
+    if !conditions.is_empty() {
+        query.push_str(" WHERE ");
+        query.push_str(&conditions.join(" AND "));
+    }
+
     let conn = db.lock().unwrap();
-    let mut stmt = conn.prepare("SELECT (COUNT(*) + ?1 - 1) / ?1 FROM users")?;
-    let total_pages: usize = stmt.query_row([page_size], |row| row.get(0))?;
-    Ok(total_pages)
+
+    let total = conn.query_row(
+        query.as_str(),
+        params_from_iter(params.iter()),
+        |row| row.get(0),  // grab column 0 (the count)
+    )?;
+
+    Ok(total)
 }
 pub fn delete_user(db: &SharedDb, user_id: i64) -> Result<bool> {
     let conn = db.lock().unwrap();
