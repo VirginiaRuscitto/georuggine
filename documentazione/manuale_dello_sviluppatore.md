@@ -47,9 +47,17 @@ Note:
 - `movement_sessions` è una tabella derivata che raccoglie le sessioni di movimento a partire dagli eventi di cambio stato. In questo modo, per generare i report non è necessario rielaborare ogni volta l'intero `position_log`. La tabella è inoltre indicizzata su (`user_id`, `started_at`) per velocizzare la ricerca delle sessioni di uno specifico utente che si sovrappongono all'intervallo richiesto.
 - Lo stato "disconnesso" non è mai persistito: è rappresentato implicitamente dall'assenza dell'utente dalla mappa delle connessioni attive mantenuta in memoria dal server.
 
-### 1.4 Avvio dell'applicazione e dimensione dell'eseguibile
+### 1.4 Prerequisiti e installazione
 
-Per compilare ed eseguire il progetto sono necessari Rust e Cargo per il backend e Node.js con npm per il frontend. È inoltre necessario disporre di un broker MQTT per la comunicazione tra il server e i client.
+Il progetto è compatibile con Windows 10/11 e con le principali distribuzioni Linux (es. Ubuntu 22.04 o successive).
+
+Per compilare ed eseguire il progetto sono necessari Rust e Cargo per il backend e Node.js con npm per il frontend. È inoltre richiesto `mkcert`, utilizzato per generare i certificati TLS self-signed necessari per servire il backend tramite HTTPS. Prima del primo avvio del server è quindi necessario installare la Certification Authority (CA) locale e generare una coppia di certificato e chiave valida per localhost, che viene successivamente caricata automaticamente all'avvio dell'applicazione.
+
+Non è invece necessario installare localmente un broker MQTT, poiché il progetto utilizza attualmente il broker pubblico `broker.emqx.io`. In un eventuale ambiente di deploy o produzione, tale broker pubblico può essere sostituito da un broker MQTT dedicato o da un'istanza configurata localmente, in base alle esigenze dell'infrastruttura.
+
+Attualmente, i file `.env` necessari al backend e al frontend sono già presenti nel progetto e contengono le configurazioni richieste. In caso di deploy o utilizzo in un ambiente di produzione, i valori delle variabili d'ambiente possono essere modificati in base alle necessità dell'ambiente di destinazione, mantenendo riservati quelli contenenti informazioni sensibili.
+
+### 1.5 Avvio dell'applicazione e dimensione dell'eseguibile
 
 Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separatamente il backend e il frontend.
 - **Backend**
