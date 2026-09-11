@@ -33,7 +33,6 @@ Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separat
   cd fleet_simulation
   cargo run --bin replay
   ```
-
 ## 4.Primo accesso: registrazione e login
 
 - Registrazione:
@@ -108,8 +107,6 @@ Nella sidebar laterale saranno presenti due chat: una chat unicast con l'amminis
 - Promuovi utente ad amministratore (o rimuovi amministratore):
   - Clicca sullo switch a destra del nome utente
   - Conferma: a destra del nome comparirà il ruolo corrente della persona (Utente/Admin). Un amministratore sarà inoltre indicato con il colore arancione
-- Richiedi report utente: 
-  - Clicca sul tasto blu con una R sopra
 - Cancella utente: 
   - Clicca sull'icona rossa con un cestino sopra
   - Conferma: clicca "Ok" sul banner di conferma che comparirà
@@ -122,9 +119,4 @@ Nella sidebar laterale saranno presenti due chat: una chat unicast con l'amminis
   - Seleziona la granularità del report (Giorno/Settimana/Mese)
   - Clicca su "Genera report"
   - Visualizzazione: sopra la mappa compariranno le statistiche esaminate (velocità media, tempo in movimento, tempo in pausa) mentre nella mappa verrà visualizzato il tragitto compiuto nell'arco di tempo indicato, con tanto di punto di partenza e punto di arrivo
-
-## 10.Risoluzione problemi (FAQ)
-
-l'ho copiato dall'altro, potrebbe essere una buona idea metterlo
-TODO pensare a eventuali problemi o difficoltà che l'utente può riscontrare e a come risolverli
 
