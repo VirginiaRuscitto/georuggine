@@ -77,7 +77,7 @@ Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separat
   cargo run --bin replay
   ```
 
-TODO dimensione applicazione 
+L'eseguibile del backend georuggine ha una dimensione di 9,23 MB (9.687.040 byte).
 
 ## 2. Aspetti trasversali del server
 
