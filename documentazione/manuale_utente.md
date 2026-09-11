@@ -28,7 +28,7 @@ Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separat
   npm install
   npm run dev
   ```
-  - **Demo**
+- **Demo**
   ```bash
   cd fleet_simulation
   cargo run --bin replay

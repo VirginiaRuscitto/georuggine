@@ -17,8 +17,6 @@ import GlassCard from '../../components/ui/GlassCard';
 import { api } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
 
-// Il backend non ha (e non ha mai avuto in questa versione) un campo
-// "username": gli utenti sono identificati da name / surname / email.
 interface UserItem {
   id: number;
   name: string;
@@ -67,6 +65,14 @@ function getStateColorClass(state: string): string {
   if (s === 'moving' || s === 'inmovimento' || s === 'in_movimento') return 'bg-emerald-400';
   if (s === 'stopped' || s === 'fermo') return 'bg-amber-400';
   return 'bg-neutral-600';
+}
+
+function getStateLabel(state: string): string {
+  const s = (state ?? '').toLowerCase();
+  if (s === 'moving') return 'In movimento';
+  if (s === 'stopped') return 'Fermo';
+  if (s === 'disconnected') return 'Disconnesso';
+  return state; 
 }
 
 export default function AdminUsersPage() {
@@ -344,7 +350,7 @@ export default function AdminUsersPage() {
           {/* Lista utenti */}
           <GlassCard variant="hover" delay={0.2}>
             <div className="flex items-center justify-center mb-6">
-              <h2 className="text-base font-semibold text-muted tracking-wide">Users list</h2>
+              <h2 className="text-base font-semibold text-muted tracking-wide">Lista utenti</h2>
             </div>
 
             {/* Search + filters */}
@@ -372,7 +378,7 @@ export default function AdminUsersPage() {
                   whileTap={{ scale: 0.97 }}
                 >
                   <SlidersHorizontal size={14} />
-                  Filters admin/state
+                  Filtri admin/stato
                 </motion.button>
 
                 <AnimatePresence>
@@ -570,20 +576,11 @@ function UserRow({
       {/* Stato */}
       <div className="flex items-center gap-2 text-xs text-muted">
         <span className={`w-2 h-2 rounded-full flex-shrink-0 ${stateColor}`} aria-label={`state ${user.state}`} />
-        <span className="capitalize truncate">{user.state}</span>
+        <span className="capitalize truncate">{getStateLabel(user.state)}</span>
       </div>
 
       {/* Actions */}
       <div className="flex items-center justify-end gap-2">
-        <motion.button
-          type="button"
-          onClick={() => alert(`Richieste per ${getDisplayName(user)}: funzione non ancora implementata`)}
-          className="w-8 h-8 rounded-md bg-blue-500/10 border border-blue-500/30 text-blue-400 flex items-center justify-center hover:bg-blue-500/20 transition-colors text-xs font-bold"
-          whileTap={{ scale: 0.92 }}
-          title="Richieste"
-        >
-          R
-        </motion.button>
         <motion.button
           type="button"
           onClick={onDelete}
