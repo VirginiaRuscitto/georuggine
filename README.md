@@ -37,15 +37,15 @@ individualmente sia tramite comunicazioni broadcast rivolte all'intera flotta di
 ## Screenshot
 
 ### Dashboard amministratore
-
+![Dashboard amministratore](./documentazione/screenshots/dashboard.png)
 ### Reportistica di un conducente
-
+![Reportistica di un conducente](./documentazione/screenshots/report.png)
 ### Messaggistica lato amministratore
-
+![Messaggistica lato amministratore](./documentazione/screenshots/messaggi.png)
 ## Documentazione
 
-- [Manuale utente](./documentazione/manuale_dello_sviluppatore.md)
-- [Manuale dello sviluppatore](./documentazione/manuale_utente.md)
+- [Manuale dello sviluppatore](./documentazione/manuale_dello_sviluppatore.md)
+- [Manuale utente](./documentazione/manuale_utente.md)
 
 ## Avvio in locale
 Per avviare l'applicazione in ambiente di sviluppo è necessario avviare separatamente il backend e il frontend.
